@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -151,6 +152,9 @@ func (p *ClaudeCLIProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 	var finalResp ChatResponse
 	var contentBuf strings.Builder
 
+	// Media save directory: workDir/media/ for images extracted from tool results.
+	mediaDir := filepath.Join(workDir, "media")
+
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			break // context cancelled (abort) → exit immediately
@@ -183,6 +187,12 @@ func (p *ClaudeCLIProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 			}
 			if thinking != "" {
 				onChunk(StreamChunk{Thinking: thinking})
+			}
+
+		case "user":
+			// Extract images from tool result events (e.g. Playwright MCP screenshots).
+			if media := extractToolResultMedia(line, mediaDir); len(media) > 0 {
+				finalResp.CLIMedia = append(finalResp.CLIMedia, media...)
 			}
 
 		case "result":
@@ -237,4 +247,148 @@ func (p *ClaudeCLIProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 
 	onChunk(StreamChunk{Done: true})
 	return &finalResp, nil
+}
+
+// extractToolResultMedia parses a "user" stream event for tool_result content blocks
+// containing images. Handles two patterns:
+//  1. Base64 image data (MCP or Anthropic format) — decoded and saved to mediaDir
+//  2. File path references via <media:image url="file:///path"> tags — referenced directly
+//
+// Returns extracted media files for forwarding to channels (e.g. Telegram).
+func extractToolResultMedia(line []byte, mediaDir string) []CLIMediaFile {
+	var ev struct {
+		Type    string `json:"type"`
+		Message *struct {
+			Content []struct {
+				Type    string          `json:"type"`    // "tool_result"
+				Content json.RawMessage `json:"content"` // string or array of parts
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil || ev.Message == nil {
+		return nil
+	}
+
+	var media []CLIMediaFile
+	for _, block := range ev.Message.Content {
+		if block.Type != "tool_result" || len(block.Content) == 0 {
+			continue
+		}
+
+		trimmed := bytes.TrimSpace(block.Content)
+		if len(trimmed) == 0 {
+			continue
+		}
+
+		// content can be a string — check for <media:image> tags with file paths
+		if trimmed[0] == '"' {
+			var text string
+			if err := json.Unmarshal(block.Content, &text); err == nil {
+				if mf := parseMediaImageTag(text); mf != nil {
+					media = append(media, *mf)
+				}
+			}
+			continue
+		}
+
+		// content is an array of parts
+		if trimmed[0] != '[' {
+			continue
+		}
+		var parts []cliContentPart
+		if err := json.Unmarshal(block.Content, &parts); err != nil {
+			continue
+		}
+		for _, part := range parts {
+			switch part.Type {
+			case "image":
+				// MCP format: {type: "image", data: "base64...", mimeType: "image/png"}
+				if part.Data != "" {
+					mf := saveBase64Media(part.MimeType, part.Data, mediaDir)
+					if mf != nil {
+						media = append(media, *mf)
+					}
+					continue
+				}
+				// Anthropic API format: {type: "image", source: {type: "base64", ...}}
+				if part.Source != nil && part.Source.Data != "" {
+					mf := saveBase64Media(part.Source.MediaType, part.Source.Data, mediaDir)
+					if mf != nil {
+						media = append(media, *mf)
+					}
+				}
+			case "text":
+				// Check for <media:image url="file:///path"> in text parts
+				if part.Text != "" {
+					if mf := parseMediaImageTag(part.Text); mf != nil {
+						media = append(media, *mf)
+					}
+				}
+			}
+		}
+	}
+	return media
+}
+
+// parseMediaImageTag extracts a file path from <media:image url="file:///path"> tags.
+// Returns a CLIMediaFile if the referenced file exists on disk.
+func parseMediaImageTag(text string) *CLIMediaFile {
+	const prefix = `<media:image url="file://`
+	idx := strings.Index(text, prefix)
+	if idx < 0 {
+		return nil
+	}
+	rest := text[idx+len(prefix):]
+	end := strings.IndexByte(rest, '"')
+	if end <= 0 {
+		return nil
+	}
+	filePath := rest[:end]
+	if _, err := os.Stat(filePath); err != nil {
+		return nil
+	}
+	ext := strings.ToLower(filepath.Ext(filePath))
+	mime := "application/octet-stream"
+	switch ext {
+	case ".png":
+		mime = "image/png"
+	case ".jpg", ".jpeg":
+		mime = "image/jpeg"
+	case ".gif":
+		mime = "image/gif"
+	case ".webp":
+		mime = "image/webp"
+	}
+	slog.Info("claude-cli: media extracted from file tag", "path", filePath, "mime", mime)
+	return &CLIMediaFile{Path: filePath, MimeType: mime}
+}
+
+// saveBase64Media decodes base64 image data, saves to mediaDir, and returns a CLIMediaFile.
+func saveBase64Media(mimeType, b64data, mediaDir string) *CLIMediaFile {
+	data, err := base64.StdEncoding.DecodeString(b64data)
+	if err != nil {
+		slog.Debug("claude-cli: failed to decode base64 media", "error", err)
+		return nil
+	}
+	if err := os.MkdirAll(mediaDir, 0755); err != nil {
+		slog.Warn("claude-cli: failed to create media dir", "dir", mediaDir, "error", err)
+		return nil
+	}
+	ext := ".png" // default
+	switch mimeType {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/gif":
+		ext = ".gif"
+	case "image/webp":
+		ext = ".webp"
+	}
+	filename := fmt.Sprintf("cli_media_%d%s", time.Now().UnixNano(), ext)
+	path := filepath.Join(mediaDir, filename)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		slog.Warn("claude-cli: failed to save media file", "path", path, "error", err)
+		return nil
+	}
+	slog.Info("claude-cli: media extracted from tool result", "path", path, "mime", mimeType, "size", len(data))
+	return &CLIMediaFile{Path: path, MimeType: mimeType}
 }

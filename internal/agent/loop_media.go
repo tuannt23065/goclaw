@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -59,6 +60,37 @@ func deduplicateMedia(media []MediaResult) []MediaResult {
 		result = append(result, m)
 	}
 	return result
+}
+
+// parseMediaImageTags scans text for <media:image url="file:///path"> tags and returns
+// MediaResults for files that exist on disk. Used to extract media from CLI provider
+// responses where tools (e.g. Playwright MCP) embed file references in text output.
+func parseMediaImageTags(text string) []MediaResult {
+	const prefix = `<media:image url="file://`
+	var results []MediaResult
+	remaining := text
+	for {
+		idx := strings.Index(remaining, prefix)
+		if idx < 0 {
+			break
+		}
+		rest := remaining[idx+len(prefix):]
+		end := strings.IndexByte(rest, '"')
+		if end <= 0 {
+			break
+		}
+		filePath := rest[:end]
+		remaining = rest[end:]
+
+		if _, err := os.Stat(filePath); err != nil {
+			continue
+		}
+		results = append(results, MediaResult{
+			Path:        filePath,
+			ContentType: mimeFromExt(filepath.Ext(filePath)),
+		})
+	}
+	return results
 }
 
 // mimeFromExt returns a MIME type for common media file extensions.

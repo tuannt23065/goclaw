@@ -69,6 +69,12 @@ type ChatRequest struct {
 	Options  map[string]any   `json:"options,omitempty"`
 }
 
+// CLIMediaFile represents a media file extracted from CLI tool results (e.g. Playwright MCP screenshots).
+type CLIMediaFile struct {
+	Path     string `json:"path"`      // absolute file path
+	MimeType string `json:"mime_type"` // e.g. "image/png"
+}
+
 // ChatResponse is the result from an LLM call.
 type ChatResponse struct {
 	Content      string     `json:"content"`
@@ -76,6 +82,10 @@ type ChatResponse struct {
 	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
 	FinishReason string     `json:"finish_reason"` // "stop", "tool_calls", "length"
 	Usage        *Usage     `json:"usage,omitempty"`
+
+	// CLIMedia holds media extracted from tool results during a CLI provider run.
+	// Populated by claude-cli when tools (e.g. Playwright MCP) return images.
+	CLIMedia []CLIMediaFile `json:"-"`
 
 	// Phase is Codex-specific (gpt-5.3-codex): "commentary" or "final_answer".
 	// Agent loop must persist this on assistant messages for Codex performance.

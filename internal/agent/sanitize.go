@@ -416,9 +416,20 @@ func isWordChar(r rune) bool {
 // Single-line only (no (?s) dotall). Does NOT match arbitrary [[...]] content.
 var messageDirectivePattern = regexp.MustCompile(`\[\[\w+(?::[^\]\n]+)?\]\]`)
 
+// mediaImageTagPattern matches <media:image url="...">...</media:image> tags embedded
+// by MCP tools (e.g. Playwright screenshot). These are internal markers for media
+// extraction and must be stripped from user-facing text.
+var mediaImageTagPattern = regexp.MustCompile(`<media:image\s[^>]*>.*?</media:image>`)
+
 // StripMessageDirectives removes internal [[...]] routing tags from user-facing text,
 // preserving [[tts...]] tags needed by the TTS auto-apply pipeline.
+// Also strips <media:image> tags (already extracted as media attachments).
 func StripMessageDirectives(content string) string {
+	// Strip <media:image> tags first.
+	if strings.Contains(content, "<media:image") {
+		content = mediaImageTagPattern.ReplaceAllString(content, "")
+		content = strings.TrimSpace(content)
+	}
 	if !strings.Contains(content, "[[") {
 		return content
 	}

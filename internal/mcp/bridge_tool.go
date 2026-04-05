@@ -2,13 +2,18 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
+	"log/slog"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
@@ -127,7 +132,45 @@ func (t *BridgeTool) Execute(ctx context.Context, args map[string]any) *tools.Re
 	// Wrap MCP tool results as external/untrusted content to prevent prompt injection.
 	// MCP servers may be third-party and return adversarial content.
 	wrapped := wrapMCPContent(text, t.serverName, t.toolName)
-	return tools.NewResult(wrapped)
+	r := tools.NewResult(wrapped)
+
+	// Extract image content from MCP result and attach as media files.
+	for _, c := range result.Content {
+		slog.Info("mcp.bridge: content type", "type", fmt.Sprintf("%T", c), "tool", t.toolName)
+		switch img := c.(type) {
+		case mcpgo.ImageContent:
+			if fp := saveMCPImage(img.Data, img.MIMEType, t.toolName); fp != "" {
+				r.Media = append(r.Media, bus.MediaFile{Path: fp, MimeType: img.MIMEType})
+			}
+		case *mcpgo.ImageContent:
+			if fp := saveMCPImage(img.Data, img.MIMEType, t.toolName); fp != "" {
+				r.Media = append(r.Media, bus.MediaFile{Path: fp, MimeType: img.MIMEType})
+			}
+		}
+	}
+
+	return r
+}
+
+// saveMCPImage decodes base64 image data and saves to a temp file.
+func saveMCPImage(data, mimeType, toolName string) string {
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(os.TempDir(), "mcp-media")
+	os.MkdirAll(dir, 0755)
+	ext := ".png"
+	if strings.Contains(mimeType, "jpeg") || strings.Contains(mimeType, "jpg") {
+		ext = ".jpg"
+	} else if strings.Contains(mimeType, "webp") {
+		ext = ".webp"
+	}
+	fp := filepath.Join(dir, fmt.Sprintf("%s_%d%s", toolName, time.Now().UnixNano(), ext))
+	if err := os.WriteFile(fp, raw, 0644); err != nil {
+		return ""
+	}
+	return fp
 }
 
 // inputSchemaToMap converts mcp.ToolInputSchema to the map format expected by tools.Tool.Parameters().

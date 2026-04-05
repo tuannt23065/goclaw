@@ -1,5 +1,7 @@
 package providers
 
+import "encoding/json"
+
 // Claude CLI JSON response types (internal).
 // These map to the output of `claude -p --output-format json/stream-json`.
 
@@ -36,9 +38,28 @@ type cliStreamMsg struct {
 	Content []cliContentBlock `json:"content"`
 }
 
-// cliContentBlock is a single content block (text, thinking, tool_use).
+// cliContentBlock is a single content block (text, thinking, tool_use, tool_result).
 type cliContentBlock struct {
 	Type     string `json:"type"`               // "text", "thinking", "tool_use", "tool_result"
-	Text     string `json:"text,omitempty"`     // for type="text"
-	Thinking string `json:"thinking,omitempty"` // for type="thinking"
+	Text     string `json:"text,omitempty"`      // for type="text"
+	Thinking string `json:"thinking,omitempty"`  // for type="thinking"
+	// tool_result fields
+	Content json.RawMessage `json:"content,omitempty"` // for type="tool_result": string or array of content parts
+}
+
+// cliImageSource holds base64 image data from tool results (e.g. MCP screenshots).
+type cliImageSource struct {
+	Type      string `json:"type"`       // "base64"
+	MediaType string `json:"media_type"` // e.g. "image/png"
+	Data      string `json:"data"`       // base64-encoded image bytes
+}
+
+// cliContentPart is a single part within a tool_result content array.
+// Handles both Anthropic API format (source.data) and MCP format (data + mimeType).
+type cliContentPart struct {
+	Type     string          `json:"type"`               // "image", "text"
+	Text     string          `json:"text,omitempty"`     // for type="text"
+	Source   *cliImageSource `json:"source,omitempty"`   // Anthropic API format
+	Data     string          `json:"data,omitempty"`     // MCP format: base64 image data
+	MimeType string          `json:"mimeType,omitempty"` // MCP format: e.g. "image/png"
 }

@@ -462,6 +462,15 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (result *RunResult, 
 
 			rs.finalContent = resp.Content
 			rs.finalThinking = resp.Thinking
+			// Collect media from CLI provider tool results (e.g. Playwright MCP screenshots).
+			for _, mf := range resp.CLIMedia {
+				rs.mediaResults = append(rs.mediaResults, MediaResult{Path: mf.Path, ContentType: mf.MimeType})
+			}
+			// Also scan final content for <media:image url="file:///path"> tags
+			// (CLI providers like claude-cli may embed file references in their text output).
+			if media := parseMediaImageTags(resp.Content); len(media) > 0 {
+				rs.mediaResults = append(rs.mediaResults, media...)
+			}
 			break
 		}
 
