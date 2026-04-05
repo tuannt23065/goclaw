@@ -95,20 +95,26 @@ func (m *Manager) touchPageLocked(targetID string) {
 	m.pageLastUsed[targetID] = time.Now()
 }
 
+// healthCheckTimeout is the maximum time to wait for a browser health check
+// (Pages() call) before considering the connection dead. This prevents a stale
+// WebSocket from holding the mutex indefinitely and blocking all browser operations.
+const healthCheckTimeout = 5 * time.Second
+
 // Start launches a local Chrome browser or connects to a remote one.
 // If already connected but the connection is dead, it reconnects automatically.
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// If browser exists, check if connection is still alive
+	// If browser exists, check if connection is still alive (with timeout to
+	// prevent hanging on stale WebSocket connections that block the mutex).
 	if m.browser != nil {
-		if _, err := m.browser.Pages(); err == nil {
+		if m.healthCheckLocked() {
 			return nil // already connected and healthy
 		}
-		// Connection dead — clean up and reconnect
+		// Connection dead or health check timed out — clean up and reconnect
 		m.logger.Info("browser connection lost, reconnecting")
-		m.cleanupDeadBrowserLocked()
+		m.resetStateLocked()
 	}
 
 	var controlURL string
@@ -173,6 +179,56 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// healthCheckLocked checks if the browser connection is still alive.
+// Returns true if healthy, false if dead or timed out.
+// Must be called with mu held.
+func (m *Manager) healthCheckLocked() bool {
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.browser.Pages()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err == nil
+	case <-time.After(healthCheckTimeout):
+		m.logger.Warn("browser health check timed out, treating as dead")
+		return false
+	}
+}
+
+// pagesWithTimeout calls m.browser.Pages() with a timeout guard.
+// Returns an error if the call hangs longer than healthCheckTimeout.
+// Must be called with mu held (caller already holds lock).
+func (m *Manager) pagesWithTimeout() (rod.Pages, error) {
+	type result struct {
+		pages rod.Pages
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, err := m.browser.Pages()
+		done <- result{p, err}
+	}()
+	select {
+	case r := <-done:
+		return r.pages, r.err
+	case <-time.After(healthCheckTimeout):
+		return nil, fmt.Errorf("browser.Pages() timed out after %s", healthCheckTimeout)
+	}
+}
+
+// resetStateLocked cleans up all browser state for reconnection.
+// Must be called with mu held.
+func (m *Manager) resetStateLocked() {
+	m.closeTenantContextsLocked()
+	m.browser = nil
+	m.pages = make(map[string]*rod.Page)
+	m.console = make(map[string][]ConsoleMessage)
+	m.pageTenants = make(map[string]string)
+	m.refs = NewRefStore()
 }
 
 // Stop closes the Chrome browser (local) or disconnects (remote sidecar).
@@ -279,6 +335,10 @@ func (m *Manager) Status() *StatusInfo {
 	defer m.mu.Unlock()
 
 	if m.browser == nil {
+		return &StatusInfo{Running: false}
+	}
+
+	if !m.healthCheckLocked() {
 		return &StatusInfo{Running: false}
 	}
 

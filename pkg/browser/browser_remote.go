@@ -53,8 +53,8 @@ func (m *Manager) getPage(targetID string) (*rod.Page, error) {
 		}
 	}
 
-	// Refresh page list from browser
-	pages, err := m.browser.Pages()
+	// Refresh page list from browser (with timeout to prevent hanging on stale connections)
+	pages, err := m.pagesWithTimeout()
 	if err != nil {
 		// Connection dead — try auto-reconnect for remote Chrome
 		if m.remoteURL != "" {
@@ -62,7 +62,7 @@ func (m *Manager) getPage(targetID string) (*rod.Page, error) {
 				return nil, fmt.Errorf("list pages: %w (reconnect also failed: %v)", err, reconnErr)
 			}
 			m.logger.Info("auto-reconnected to remote Chrome")
-			pages, err = m.browser.Pages()
+			pages, err = m.pagesWithTimeout()
 			if err != nil {
 				return nil, fmt.Errorf("list pages after reconnect: %w", err)
 			}
