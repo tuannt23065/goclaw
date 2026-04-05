@@ -13,13 +13,24 @@ import (
 )
 
 // BrowserTool implements tools.Tool for browser automation.
+// It uses a ManagerPool to resolve the correct browser Manager per-request,
+// supporting per-agent/team Chrome profiles via different CDP remote URLs.
 type BrowserTool struct {
-	manager *Manager
+	pool *ManagerPool
 }
 
-// NewBrowserTool creates a BrowserTool wrapping a Manager.
-func NewBrowserTool(manager *Manager) *BrowserTool {
-	return &BrowserTool{manager: manager}
+// NewBrowserTool creates a BrowserTool backed by a ManagerPool.
+func NewBrowserTool(pool *ManagerPool) *BrowserTool {
+	return &BrowserTool{pool: pool}
+}
+
+// managerFromCtx resolves the correct browser Manager for the current request.
+// Priority: RunContext.BrowserRemoteURL > global fallback.
+func (t *BrowserTool) managerFromCtx(ctx context.Context) *Manager {
+	if rc := store.RunContextFromCtx(ctx); rc != nil && rc.BrowserRemoteURL != "" {
+		return t.pool.Get(rc.BrowserRemoteURL)
+	}
+	return t.pool.Fallback()
 }
 
 func (t *BrowserTool) Name() string { return "browser" }
@@ -138,6 +149,9 @@ func (t *BrowserTool) Execute(ctx context.Context, args map[string]any) *tools.R
 		return tools.ErrorResult("action is required")
 	}
 
+	// Resolve the correct browser Manager for this request (per-agent/team or global).
+	mgr := t.managerFromCtx(ctx)
+
 	// Propagate tenant ID from store context to browser context for page isolation.
 	if tid := store.TenantIDFromContext(ctx); tid.String() != "00000000-0000-0000-0000-000000000000" {
 		ctx = WithTenantID(ctx, tid.String())
@@ -146,7 +160,7 @@ func (t *BrowserTool) Execute(ctx context.Context, args map[string]any) *tools.R
 	// Auto-start browser for actions that need it
 	switch action {
 	case "open", "snapshot", "screenshot", "navigate", "act", "tabs":
-		if err := t.manager.Start(ctx); err != nil {
+		if err := mgr.Start(ctx); err != nil {
 			return tools.ErrorResult(fmt.Sprintf("failed to start browser: %v", err))
 		}
 	}
@@ -154,7 +168,7 @@ func (t *BrowserTool) Execute(ctx context.Context, args map[string]any) *tools.R
 	// Apply per-action timeout for heavy operations
 	switch action {
 	case "open", "navigate", "snapshot", "screenshot", "act":
-		timeout := t.manager.ActionTimeout()
+		timeout := mgr.ActionTimeout()
 		if ms, ok := args["timeoutMs"].(float64); ok && ms > 0 {
 			timeout = time.Duration(ms) * time.Millisecond
 		}
@@ -165,80 +179,80 @@ func (t *BrowserTool) Execute(ctx context.Context, args map[string]any) *tools.R
 
 	switch action {
 	case "status":
-		return t.handleStatus()
+		return t.handleStatus(mgr)
 	case "start":
-		return t.handleStart(ctx)
+		return t.handleStart(ctx, mgr)
 	case "stop":
-		return t.handleStop(ctx)
+		return t.handleStop(ctx, mgr)
 	case "tabs":
-		return t.handleTabs(ctx)
+		return t.handleTabs(ctx, mgr)
 	case "open":
-		return t.handleOpen(ctx, args)
+		return t.handleOpen(ctx, mgr, args)
 	case "close":
-		return t.handleClose(ctx, args)
+		return t.handleClose(ctx, mgr, args)
 	case "snapshot":
-		return t.handleSnapshot(ctx, args)
+		return t.handleSnapshot(ctx, mgr, args)
 	case "screenshot":
-		return t.handleScreenshot(ctx, args)
+		return t.handleScreenshot(ctx, mgr, args)
 	case "navigate":
-		return t.handleNavigate(ctx, args)
+		return t.handleNavigate(ctx, mgr, args)
 	case "console":
-		return t.handleConsole(ctx, args)
+		return t.handleConsole(ctx, mgr, args)
 	case "act":
-		return t.handleAct(ctx, args)
+		return t.handleAct(ctx, mgr, args)
 	default:
 		return tools.ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
 }
 
-func (t *BrowserTool) handleStatus() *tools.Result {
-	status := t.manager.Status()
+func (t *BrowserTool) handleStatus(mgr *Manager) *tools.Result {
+	status := mgr.Status()
 	return jsonResult(status)
 }
 
-func (t *BrowserTool) handleStart(ctx context.Context) *tools.Result {
-	if err := t.manager.Start(ctx); err != nil {
+func (t *BrowserTool) handleStart(ctx context.Context, mgr *Manager) *tools.Result {
+	if err := mgr.Start(ctx); err != nil {
 		return tools.ErrorResult(fmt.Sprintf("failed to start browser: %v", err))
 	}
 	return tools.NewResult("Browser started successfully.")
 }
 
-func (t *BrowserTool) handleStop(ctx context.Context) *tools.Result {
-	if err := t.manager.Stop(ctx); err != nil {
+func (t *BrowserTool) handleStop(ctx context.Context, mgr *Manager) *tools.Result {
+	if err := mgr.Stop(ctx); err != nil {
 		return tools.ErrorResult(fmt.Sprintf("failed to stop browser: %v", err))
 	}
 	return tools.NewResult("Browser stopped.")
 }
 
-func (t *BrowserTool) handleTabs(ctx context.Context) *tools.Result {
-	tabs, err := t.manager.ListTabs(ctx)
+func (t *BrowserTool) handleTabs(ctx context.Context, mgr *Manager) *tools.Result {
+	tabs, err := mgr.ListTabs(ctx)
 	if err != nil {
 		return tools.ErrorResult(err.Error())
 	}
 	return jsonResult(tabs)
 }
 
-func (t *BrowserTool) handleOpen(ctx context.Context, args map[string]any) *tools.Result {
+func (t *BrowserTool) handleOpen(ctx context.Context, mgr *Manager, args map[string]any) *tools.Result {
 	url, _ := args["targetUrl"].(string)
 	if url == "" {
 		return tools.ErrorResult("targetUrl is required for open action")
 	}
-	tab, err := t.manager.OpenTab(ctx, url)
+	tab, err := mgr.OpenTab(ctx, url)
 	if err != nil {
 		return tools.ErrorResult(err.Error())
 	}
 	return jsonResult(tab)
 }
 
-func (t *BrowserTool) handleClose(ctx context.Context, args map[string]any) *tools.Result {
+func (t *BrowserTool) handleClose(ctx context.Context, mgr *Manager, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
-	if err := t.manager.CloseTab(ctx, targetID); err != nil {
+	if err := mgr.CloseTab(ctx, targetID); err != nil {
 		return tools.ErrorResult(err.Error())
 	}
 	return tools.NewResult("Tab closed.")
 }
 
-func (t *BrowserTool) handleSnapshot(ctx context.Context, args map[string]any) *tools.Result {
+func (t *BrowserTool) handleSnapshot(ctx context.Context, mgr *Manager, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	opts := DefaultSnapshotOptions()
 
@@ -255,7 +269,7 @@ func (t *BrowserTool) handleSnapshot(ctx context.Context, args map[string]any) *
 		opts.MaxDepth = int(d)
 	}
 
-	snap, err := t.manager.Snapshot(ctx, targetID, opts)
+	snap, err := mgr.Snapshot(ctx, targetID, opts)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("snapshot failed: %v", err))
 	}
@@ -266,11 +280,11 @@ func (t *BrowserTool) handleSnapshot(ctx context.Context, args map[string]any) *
 	return tools.NewResult(header + snap.Snapshot)
 }
 
-func (t *BrowserTool) handleScreenshot(ctx context.Context, args map[string]any) *tools.Result {
+func (t *BrowserTool) handleScreenshot(ctx context.Context, mgr *Manager, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	fullPage, _ := args["fullPage"].(bool)
 
-	data, err := t.manager.Screenshot(ctx, targetID, fullPage)
+	data, err := mgr.Screenshot(ctx, targetID, fullPage)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("screenshot failed: %v", err))
 	}
@@ -292,26 +306,26 @@ func (t *BrowserTool) handleScreenshot(ctx context.Context, args map[string]any)
 	return &tools.Result{ForLLM: fmt.Sprintf("MEDIA:%s", imagePath)}
 }
 
-func (t *BrowserTool) handleNavigate(ctx context.Context, args map[string]any) *tools.Result {
+func (t *BrowserTool) handleNavigate(ctx context.Context, mgr *Manager, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	url, _ := args["targetUrl"].(string)
 	if url == "" {
 		return tools.ErrorResult("targetUrl is required for navigate action")
 	}
 
-	if err := t.manager.Navigate(ctx, targetID, url); err != nil {
+	if err := mgr.Navigate(ctx, targetID, url); err != nil {
 		return tools.ErrorResult(err.Error())
 	}
 	return tools.NewResult(fmt.Sprintf("Navigated to %s", url))
 }
 
-func (t *BrowserTool) handleConsole(ctx context.Context, args map[string]any) *tools.Result {
+func (t *BrowserTool) handleConsole(ctx context.Context, mgr *Manager, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
-	msgs := t.manager.ConsoleMessages(ctx, targetID)
+	msgs := mgr.ConsoleMessages(ctx, targetID)
 	return jsonResult(msgs)
 }
 
-func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools.Result {
+func (t *BrowserTool) handleAct(ctx context.Context, mgr *Manager, args map[string]any) *tools.Result {
 	req, ok := args["request"].(map[string]any)
 	if !ok {
 		return tools.ErrorResult("request object is required for act action")
@@ -337,7 +351,7 @@ func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools
 		if btn, ok := req["button"].(string); ok {
 			opts.Button = btn
 		}
-		if err := t.manager.Click(ctx, targetID, ref, opts); err != nil {
+		if err := mgr.Click(ctx, targetID, ref, opts); err != nil {
 			return tools.ErrorResult(fmt.Sprintf("click failed: %v", err))
 		}
 		return tools.NewResult("Clicked successfully.")
@@ -355,7 +369,7 @@ func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools
 		if sl, ok := req["slowly"].(bool); ok {
 			opts.Slowly = sl
 		}
-		if err := t.manager.Type(ctx, targetID, ref, text, opts); err != nil {
+		if err := mgr.Type(ctx, targetID, ref, text, opts); err != nil {
 			return tools.ErrorResult(fmt.Sprintf("type failed: %v", err))
 		}
 		return tools.NewResult("Typed successfully.")
@@ -365,7 +379,7 @@ func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools
 		if key == "" {
 			return tools.ErrorResult("request.key is required for press")
 		}
-		if err := t.manager.Press(ctx, targetID, key); err != nil {
+		if err := mgr.Press(ctx, targetID, key); err != nil {
 			return tools.ErrorResult(fmt.Sprintf("press failed: %v", err))
 		}
 		return tools.NewResult(fmt.Sprintf("Pressed %s.", key))
@@ -375,7 +389,7 @@ func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools
 		if ref == "" {
 			return tools.ErrorResult("request.ref is required for hover")
 		}
-		if err := t.manager.Hover(ctx, targetID, ref); err != nil {
+		if err := mgr.Hover(ctx, targetID, ref); err != nil {
 			return tools.ErrorResult(fmt.Sprintf("hover failed: %v", err))
 		}
 		return tools.NewResult("Hovered successfully.")
@@ -397,7 +411,7 @@ func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools
 		if fn, ok := req["fn"].(string); ok {
 			opts.Fn = fn
 		}
-		if err := t.manager.Wait(ctx, targetID, opts); err != nil {
+		if err := mgr.Wait(ctx, targetID, opts); err != nil {
 			return tools.ErrorResult(fmt.Sprintf("wait failed: %v", err))
 		}
 		return tools.NewResult("Wait condition met.")
@@ -407,7 +421,7 @@ func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools
 		if fn == "" {
 			return tools.ErrorResult("request.fn is required for evaluate")
 		}
-		result, err := t.manager.Evaluate(ctx, targetID, fn)
+		result, err := mgr.Evaluate(ctx, targetID, fn)
 		if err != nil {
 			return tools.ErrorResult(fmt.Sprintf("evaluate failed: %v", err))
 		}

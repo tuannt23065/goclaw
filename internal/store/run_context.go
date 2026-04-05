@@ -53,6 +53,7 @@ type RunContext struct {
 	TeamTaskID       string
 	LeaderAgentID    string // leader's agent UUID for member memory read fallback
 	AgentToolKey     string // tool-level agent key for registry routing
+	BrowserRemoteURL string // per-agent/team browser CDP endpoint override
 }
 
 // WithRunContext stores a RunContext on the context.

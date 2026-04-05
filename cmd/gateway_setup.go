@@ -42,6 +42,7 @@ func setupToolRegistry(
 	mcpMgr *mcpbridge.Manager,
 	sandboxMgr sandbox.Manager,
 	browserMgr *browser.Manager,
+	browserPool *browser.ManagerPool,
 	webFetchTool *tools.WebFetchTool,
 	ttsTool *tools.TtsTool,
 	permPE *permissions.PolicyEngine,
@@ -111,7 +112,8 @@ func setupToolRegistry(
 			opts = append(opts, browser.WithMaxPages(cfg.Tools.Browser.MaxPages))
 		}
 		browserMgr = browser.New(opts...)
-		toolsReg.Register(browser.NewBrowserTool(browserMgr))
+		browserPool = browser.NewManagerPool(browserMgr, opts...)
+		toolsReg.Register(browser.NewBrowserTool(browserPool))
 	}
 
 	// Web tools (web_search + web_fetch)

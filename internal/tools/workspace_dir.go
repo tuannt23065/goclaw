@@ -51,6 +51,21 @@ func IsSharedWorkspace(settings json.RawMessage) bool {
 	return s.WorkspaceScope == "shared"
 }
 
+// ParseTeamBrowserRemoteURL extracts a per-team browser CDP remote URL from team settings JSONB.
+// Returns empty string if not configured (falls back to agent or global default).
+func ParseTeamBrowserRemoteURL(settings json.RawMessage) string {
+	if settings == nil {
+		return ""
+	}
+	var s struct {
+		BrowserRemoteURL string `json:"browser_remote_url"`
+	}
+	if json.Unmarshal(settings, &s) != nil {
+		return ""
+	}
+	return s.BrowserRemoteURL
+}
+
 // blockedExtensions lists executable file types that are not allowed in team workspaces.
 var blockedExtensions = map[string]bool{
 	".exe": true, ".sh": true, ".bat": true, ".cmd": true,

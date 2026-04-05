@@ -131,6 +131,9 @@ type Loop struct {
 	// Shell deny group overrides from agent other_config (nil = all defaults)
 	shellDenyGroups map[string]bool
 
+	// Per-agent browser CDP remote URL (empty = use team or global default)
+	browserRemoteURL string
+
 	// Event callback for broadcasting agent events (run.started, chunk, tool.call, etc.)
 	onEvent func(event AgentEvent)
 
@@ -256,6 +259,9 @@ type LoopConfig struct {
 
 	// Shell deny group overrides (nil = all defaults)
 	ShellDenyGroups map[string]bool
+
+	// Per-agent browser CDP remote URL (empty = use team or global default)
+	BrowserRemoteURL string
 
 	// Agent UUID + tenant for context propagation to tools
 	AgentUUID  uuid.UUID
@@ -397,6 +403,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		sandboxContainerDir:    cfg.SandboxContainerDir,
 		sandboxWorkspaceAccess: cfg.SandboxWorkspaceAccess,
 		shellDenyGroups:        cfg.ShellDenyGroups,
+		browserRemoteURL:      cfg.BrowserRemoteURL,
 		traceCollector:         cfg.TraceCollector,
 		inputGuard:             guard,
 		injectionAction:        action,

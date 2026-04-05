@@ -156,6 +156,21 @@ func (a *AgentData) ParseMemoryConfig() *config.MemoryConfig {
 	return &c
 }
 
+// ParseBrowserRemoteURL extracts a per-agent browser CDP remote URL from tools_config JSONB.
+// Returns empty string if not configured (falls back to global default).
+func (a *AgentData) ParseBrowserRemoteURL() string {
+	if len(a.ToolsConfig) == 0 {
+		return ""
+	}
+	var cfg struct {
+		BrowserRemoteURL string `json:"browser_remote_url"`
+	}
+	if json.Unmarshal(a.ToolsConfig, &cfg) != nil {
+		return ""
+	}
+	return cfg.BrowserRemoteURL
+}
+
 // ParseThinkingLevel extracts the normalized reasoning effort from other_config JSONB.
 // Missing config defaults to "off" to match the dashboard and docs.
 func (a *AgentData) ParseThinkingLevel() string {

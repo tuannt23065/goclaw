@@ -230,6 +230,14 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		)
 	}
 
+	// Resolve browser remote URL: team settings > agent config > global (handled by tool fallback).
+	browserRemoteURL := l.browserRemoteURL
+	if resolvedTeamSettings != nil {
+		if teamBrowserURL := tools.ParseTeamBrowserRemoteURL(resolvedTeamSettings); teamBrowserURL != "" {
+			browserRemoteURL = teamBrowserURL
+		}
+	}
+
 	// Build RunContext from all resolved values and inject as single context key.
 	// This provides a typed, inspectable snapshot of all loop-injected context.
 	// Individual With* keys above remain for backward compat during transition.
@@ -264,6 +272,7 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		TeamTaskID:          req.TeamTaskID,
 		LeaderAgentID:       tools.LeaderAgentIDFromCtx(ctx),
 		AgentToolKey:        l.id,
+		BrowserRemoteURL:    browserRemoteURL,
 	}
 	ctx = store.WithRunContext(ctx, rc)
 

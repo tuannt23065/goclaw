@@ -406,6 +406,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			SkillNudgeInterval:     ag.ParseSkillNudgeInterval(),
 			WorkspaceSharing:       ag.ParseWorkspaceSharing(),
 			ShellDenyGroups:        ag.ParseShellDenyGroups(),
+			BrowserRemoteURL:      ag.ParseBrowserRemoteURL(),
 			ConfigPermStore:        deps.ConfigPermStore,
 			TeamStore:              deps.TeamStore,
 			SecureCLIStore:         deps.SecureCLIStore,
