@@ -141,6 +141,15 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 
 	chatID := ToolChatIDFromCtx(ctx)
 
+	// Prevent workspace duplication: in cron flows, teamID is used as fallback
+	// ChatID for message routing (to avoid message drops). When this propagates
+	// back to the leader (e.g. via announce after task cancel), chatID == teamID
+	// causes workspace to become teams/{teamID}/{teamID}. Strip it so workspace
+	// stays at team level: teams/{teamID}/.
+	if chatID != "" && chatID == ToolTeamIDFromCtx(ctx) {
+		chatID = ""
+	}
+
 	// Compute team workspace via layered pipeline: tenant → team → user/chat.
 	shared := IsSharedWorkspace(team.Settings)
 	taskMeta := make(map[string]any)
