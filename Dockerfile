@@ -74,7 +74,7 @@ COPY docker/requirements-base.txt docker/requirements-skills.txt /tmp/
 # ENABLE_FULL_SKILLS=true pre-installs all skill deps (larger image, no on-demand install needed).
 # Otherwise, skill packages are installed on-demand via the admin UI.
 RUN set -eux; \
-    apk add --no-cache ca-certificates wget su-exec font-noto font-noto-cjk; \
+    apk add --no-cache ca-certificates wget su-exec font-noto font-noto-cjk bash imagemagick imagemagick-jpeg; \
     mkdir -p /usr/share/fonts/jetbrains && \
     wget -qO /usr/share/fonts/jetbrains/JetBrainsMono-Bold.ttf \
       "https://github.com/JetBrains/JetBrainsMono/raw/master/fonts/ttf/JetBrainsMono-Bold.ttf" && \
