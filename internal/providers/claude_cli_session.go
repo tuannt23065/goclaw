@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -19,6 +20,10 @@ import (
 // a fresh session. 20MB accommodates normal conversation history; files
 // grow beyond this when base64 screenshots accumulate.
 const maxCLISessionFileSize = 20 * 1024 * 1024 // 20 MB
+
+// maxDebugLogTotalSize is the maximum total size of all debug log files
+// across all CLI workspaces. When exceeded, oldest files are deleted first.
+const maxDebugLogTotalSize int64 = 1024 * 1024 * 1024 // 1 GB
 
 // validCLIModels lists accepted model aliases for the Claude CLI.
 var validCLIModels = map[string]bool{
@@ -323,4 +328,77 @@ func filterCLIEnv(environ []string) []string {
 		filtered = append(filtered, e)
 	}
 	return filtered
+}
+
+// debugLogFile holds path and mod time for sorting during cleanup.
+type debugLogFile struct {
+	path    string
+	size    int64
+	modTime int64 // unix nano
+}
+
+// pruneDebugLogs enforces maxDebugLogTotalSize across all CLI workspace debug-logs.
+// Called after each debug log write. Deletes oldest files first until under budget.
+func pruneDebugLogs(baseWorkDir string) {
+	if baseWorkDir == "" {
+		baseWorkDir = defaultCLIWorkDir()
+	}
+
+	// Collect all .log files under */debug-logs/
+	var files []debugLogFile
+	var totalSize int64
+
+	entries, err := os.ReadDir(baseWorkDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		debugDir := filepath.Join(baseWorkDir, entry.Name(), "debug-logs")
+		logs, err := os.ReadDir(debugDir)
+		if err != nil {
+			continue
+		}
+		for _, logEntry := range logs {
+			if logEntry.IsDir() {
+				continue
+			}
+			info, err := logEntry.Info()
+			if err != nil {
+				continue
+			}
+			sz := info.Size()
+			totalSize += sz
+			files = append(files, debugLogFile{
+				path:    filepath.Join(debugDir, logEntry.Name()),
+				size:    sz,
+				modTime: info.ModTime().UnixNano(),
+			})
+		}
+	}
+
+	if totalSize <= maxDebugLogTotalSize {
+		return
+	}
+
+	// Sort oldest first
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime < files[j].modTime
+	})
+
+	deleted := 0
+	for _, f := range files {
+		if totalSize <= maxDebugLogTotalSize {
+			break
+		}
+		if err := os.Remove(f.path); err == nil {
+			totalSize -= f.size
+			deleted++
+		}
+	}
+	if deleted > 0 {
+		slog.Info("claude-cli: pruned debug logs", "deleted", deleted, "remaining_mb", totalSize/(1024*1024))
+	}
 }

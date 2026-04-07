@@ -65,8 +65,34 @@ func (p *ClaudeCLIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	slog.Debug("claude-cli exec", "cmd", fmt.Sprintf("%s %s", p.cliPath, strings.Join(args, " ")), "workdir", workDir)
+	fullCmd := fmt.Sprintf("%s %s", p.cliPath, strings.Join(args, " "))
+	slog.Debug("claude-cli exec", "cmd", fullCmd, "workdir", workDir)
+
+	start := time.Now()
 	output, err := cmd.Output()
+	elapsed := time.Since(start)
+
+	// Debug log file (same as ChatStream): timestamped per-run file when GOCLAW_DEBUG=1
+	if os.Getenv("GOCLAW_DEBUG") == "1" {
+		debugLogDir := filepath.Join(workDir, "debug-logs")
+		_ = os.MkdirAll(debugLogDir, 0755)
+		agentName := extractAgentName(sessionKey)
+		ts := start.Format("20060102-150405")
+		debugLogPath := filepath.Join(debugLogDir, fmt.Sprintf("%s_%s_%s.log", agentName, model, ts))
+		if f, ferr := os.OpenFile(debugLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600); ferr == nil {
+			fmt.Fprintf(f, "=== CMD: %s\n=== WORKDIR: %s\n=== TIME: %s\n=== SESSION: %s\n=== DURATION: %s\n\n", fullCmd, workDir, start.Format(time.RFC3339), sessionKey, elapsed)
+			f.Write(output)
+			if stderr.Len() > 0 {
+				fmt.Fprintf(f, "\n=== STDERR:\n%s\n", stderr.String())
+			}
+			if err != nil {
+				fmt.Fprintf(f, "\n=== EXIT ERROR: %v\n", err)
+			}
+			f.Close()
+			go pruneDebugLogs(p.baseWorkDir)
+		}
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("claude-cli: %w (stderr: %s)", err, stderr.String())
 	}
@@ -146,7 +172,10 @@ func (p *ClaudeCLIProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 		debugFile, _ = os.OpenFile(debugLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if debugFile != nil {
 			fmt.Fprintf(debugFile, "=== CMD: %s\n=== WORKDIR: %s\n=== TIME: %s\n=== SESSION: %s\n\n", fullCmd, workDir, time.Now().Format(time.RFC3339), sessionKey)
-			defer debugFile.Close()
+			defer func() {
+				debugFile.Close()
+				go pruneDebugLogs(p.baseWorkDir)
+			}()
 		}
 	}
 
