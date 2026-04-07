@@ -261,8 +261,12 @@ func handleTeammateMessage(
 
 		outcome := <-outCh
 
-		// Reset CLI session after each team task so screenshots and tool results
-		// don't accumulate across tasks, causing context overflow on --resume.
+		// Reset both GoClaw session (DB) and CLI session (file) after each team task.
+		// Team tasks are independent — no need to carry history across tasks.
+		// Without this, CLI session files grow unbounded (screenshots/tool results)
+		// and GoClaw session accumulates stale messages in the DB.
+		deps.SessStore.Reset(ctx, sessionKey)
+		deps.SessStore.Save(ctx, sessionKey)
 		providers.ResetCLISession("", sessionKey)
 
 		// Clean up task → session tracking now that the agent has finished.
