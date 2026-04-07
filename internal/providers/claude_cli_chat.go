@@ -135,12 +135,17 @@ func (p *ClaudeCLIProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 	}
 
 	// Debug log file: only enabled when GOCLAW_DEBUG=1
+	// Each run gets its own timestamped file so logs survive session resets.
 	var debugFile *os.File
 	if os.Getenv("GOCLAW_DEBUG") == "1" {
-		debugLogPath := filepath.Join(workDir, "cli-debug.log")
+		debugLogDir := filepath.Join(workDir, "debug-logs")
+		_ = os.MkdirAll(debugLogDir, 0755)
+		agentName := extractAgentName(sessionKey)
+		ts := time.Now().Format("20060102-150405")
+		debugLogPath := filepath.Join(debugLogDir, fmt.Sprintf("%s_%s_%s.log", agentName, model, ts))
 		debugFile, _ = os.OpenFile(debugLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if debugFile != nil {
-			fmt.Fprintf(debugFile, "=== CMD: %s\n=== WORKDIR: %s\n=== TIME: %s\n\n", fullCmd, workDir, time.Now().Format(time.RFC3339))
+			fmt.Fprintf(debugFile, "=== CMD: %s\n=== WORKDIR: %s\n=== TIME: %s\n=== SESSION: %s\n\n", fullCmd, workDir, time.Now().Format(time.RFC3339), sessionKey)
 			defer debugFile.Close()
 		}
 	}

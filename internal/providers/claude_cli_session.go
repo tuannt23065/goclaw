@@ -163,6 +163,17 @@ func extractBoolOpt(opts map[string]any, key string) bool {
 	return false
 }
 
+// extractAgentName extracts the agent key from a session key string.
+// Session key format: "agent:<agent-key>:..." → returns "<agent-key>".
+// Falls back to "unknown" if the format doesn't match.
+func extractAgentName(sessionKey string) string {
+	parts := strings.SplitN(sessionKey, ":", 3)
+	if len(parts) >= 2 && parts[0] == "agent" {
+		return parts[1]
+	}
+	return "unknown"
+}
+
 // bridgeContextFromOpts builds a BridgeContext from the Options map.
 func bridgeContextFromOpts(opts map[string]any) BridgeContext {
 	return BridgeContext{
