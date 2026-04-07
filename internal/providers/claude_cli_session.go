@@ -14,6 +14,12 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 )
 
+// maxCLISessionFileSize is the threshold above which a session file is
+// considered too large to resume. The file is deleted and the CLI starts
+// a fresh session. 20MB accommodates normal conversation history; files
+// grow beyond this when base64 screenshots accumulate.
+const maxCLISessionFileSize = 20 * 1024 * 1024 // 20 MB
+
 // validCLIModels lists accepted model aliases for the Claude CLI.
 var validCLIModels = map[string]bool{
 	"sonnet": true, "opus": true, "haiku": true,
@@ -183,13 +189,12 @@ func deriveSessionUUID(sessionKey string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(sessionKey))
 }
 
-// sessionFileExists checks if a Claude CLI session file exists for the given work directory.
-// Claude CLI resolves symlinks (e.g. /var/folders → /private/var/folders on macOS)
-// before encoding the path, so we must do the same.
-func sessionFileExists(workDir string, sessionID uuid.UUID) bool {
+// sessionFilePath returns the path to the Claude CLI session .jsonl file,
+// or "" if the home directory cannot be determined.
+func sessionFilePath(workDir string, sessionID uuid.UUID) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return false
+		return ""
 	}
 	// Resolve symlinks to match CLI's path encoding (macOS: /var → /private/var)
 	resolved, err := filepath.EvalSymlinks(workDir)
@@ -201,9 +206,34 @@ func sessionFileExists(workDir string, sessionID uuid.UUID) bool {
 	// On Windows: C:\Users\foo → C--Users-foo (backslash + colon both become "-")
 	// On macOS/Linux: /home/foo → -home-foo (forward slash becomes "-")
 	encoded := strings.NewReplacer(string(filepath.Separator), "-", "_", "-", ".", "-", ":", "-").Replace(resolved)
-	sessionFile := filepath.Join(home, ".claude", "projects", encoded, sessionID.String()+".jsonl")
-	_, err = os.Stat(sessionFile)
-	return err == nil
+	return filepath.Join(home, ".claude", "projects", encoded, sessionID.String()+".jsonl")
+}
+
+// sessionFileExists checks if a Claude CLI session file exists and is small enough to resume.
+// If the file exceeds maxCLISessionFileSize, it is deleted and false is returned
+// so the CLI starts a fresh session instead of failing on an oversized context.
+func sessionFileExists(workDir string, sessionID uuid.UUID) bool {
+	path := sessionFilePath(workDir, sessionID)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if info.Size() > maxCLISessionFileSize {
+		slog.Warn("claude-cli: session file too large, rotating",
+			"path", path,
+			"size_mb", info.Size()/(1024*1024),
+			"threshold_mb", maxCLISessionFileSize/(1024*1024),
+		)
+		if err := os.Remove(path); err != nil {
+			slog.Error("claude-cli: failed to remove oversized session file",
+				"path", path, "error", err)
+		}
+		return false
+	}
+	return true
 }
 
 // buildStreamJSONInput creates stream-json stdin for vision (images + text).
@@ -252,14 +282,7 @@ func ResetCLISession(baseWorkDir, sessionKey string) {
 	sessionID := deriveSessionUUID(sessionKey)
 
 	// Delete CLI session .jsonl file from ~/.claude/projects/
-	home, err := os.UserHomeDir()
-	if err == nil {
-		resolved, err := filepath.EvalSymlinks(workDir)
-		if err != nil {
-			resolved = workDir
-		}
-		encoded := strings.NewReplacer(string(filepath.Separator), "-", "_", "-", ".", "-", ":", "-").Replace(resolved)
-		sessionFile := filepath.Join(home, ".claude", "projects", encoded, sessionID.String()+".jsonl")
+	if sessionFile := sessionFilePath(workDir, sessionID); sessionFile != "" {
 		if err := os.Remove(sessionFile); err == nil {
 			slog.Info("claude-cli: deleted session file on /reset", "path", sessionFile)
 		}

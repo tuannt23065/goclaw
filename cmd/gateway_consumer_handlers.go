@@ -261,6 +261,10 @@ func handleTeammateMessage(
 
 		outcome := <-outCh
 
+		// Reset CLI session after each team task so screenshots and tool results
+		// don't accumulate across tasks, causing context overflow on --resume.
+		providers.ResetCLISession("", sessionKey)
+
 		// Clean up task → session tracking now that the agent has finished.
 		if taskID != "" {
 			deps.TaskRunSessions.Delete(taskID)
