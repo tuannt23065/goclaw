@@ -38,6 +38,7 @@ function deriveDefaults(team: TeamData): TeamSettingsFormData {
     blockerEscalationEnabled: sbe.enabled ?? true,
     followupInterval: s.followup_interval_minutes ?? 30,
     followupMaxReminders: s.followup_max_reminders ?? 0,
+    maxDispatchRetries: s.max_dispatch_retries ?? 3,
     allowUserIds: s.allow_user_ids ?? [],
     denyUserIds: s.deny_user_ids ?? [],
     allowChannels: s.allow_channels ?? [],
@@ -79,6 +80,7 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
   const blockerEscalationEnabled = watch("blockerEscalationEnabled");
   const followupInterval = watch("followupInterval");
   const followupMaxReminders = watch("followupMaxReminders");
+  const maxDispatchRetries = watch("maxDispatchRetries");
   const allowUserIds = watch("allowUserIds");
   const denyUserIds = watch("denyUserIds");
   const allowChannels = watch("allowChannels");
@@ -119,6 +121,7 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
       settings.blocker_escalation = { enabled: data.blockerEscalationEnabled };
       if (data.followupInterval !== 30) settings.followup_interval_minutes = data.followupInterval;
       if (data.followupMaxReminders !== 0) settings.followup_max_reminders = data.followupMaxReminders;
+      if (data.maxDispatchRetries !== 3) settings.max_dispatch_retries = data.maxDispatchRetries;
       settings.workspace_scope = data.workspaceScope || "isolated";
       await updateTeamSettings(teamId, settings);
       onSaved();
@@ -150,6 +153,7 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
         blockerEscalationEnabled={blockerEscalationEnabled} setBlockerEscalationEnabled={(v) => setValue("blockerEscalationEnabled", v)}
         followupInterval={followupInterval} setFollowupInterval={(v) => setValue("followupInterval", v)}
         followupMaxReminders={followupMaxReminders} setFollowupMaxReminders={(v) => setValue("followupMaxReminders", v)}
+        maxDispatchRetries={maxDispatchRetries} setMaxDispatchRetries={(v) => setValue("maxDispatchRetries", v)}
       />
 
       <TeamAccessControlSection

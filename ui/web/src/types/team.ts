@@ -27,6 +27,7 @@ export interface TeamAccessSettings {
   escalation_actions?: EscalationAction[];
   followup_interval_minutes?: number;
   followup_max_reminders?: number;
+  max_dispatch_retries?: number;
   workspace_scope?: string;
   workspace_quota_mb?: number;
   member_requests?: {

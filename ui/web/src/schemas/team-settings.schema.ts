@@ -17,6 +17,7 @@ export const teamSettingsSchema = z.object({
   blockerEscalationEnabled: z.boolean(),
   followupInterval: z.number().min(1).max(1440),
   followupMaxReminders: z.number().min(0).max(100),
+  maxDispatchRetries: z.number().min(1).max(20),
   // Access control
   allowUserIds: z.array(z.string()),
   denyUserIds: z.array(z.string()),

@@ -32,9 +32,8 @@ func (m *TeamToolManager) RestoreTraceContext(ctx context.Context, task *store.T
 	return m.restoreTraceContext(ctx, task)
 }
 
-// maxTaskDispatches is the max number of times a single task can be dispatched
-// before it auto-fails. Prevents infinite loops when agents can't complete a task.
-const maxTaskDispatches = 3
+// defaultMaxTaskDispatches is the fallback when team has no max_dispatch_retries setting.
+const defaultMaxTaskDispatches = 3
 
 // dispatchTaskToAgent publishes a teammate-style inbound message so the
 // gateway consumer picks it up and runs the assigned agent, then auto-completes
@@ -68,7 +67,8 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 	if dc, ok := task.Metadata["dispatch_count"].(float64); ok {
 		dispatchCount = int(dc)
 	}
-	if dispatchCount >= maxTaskDispatches {
+	maxDispatches := m.maxDispatchRetries(team)
+	if dispatchCount >= maxDispatches {
 		slog.Warn("team_tasks.dispatch: max dispatch count reached, auto-failing task",
 			"task_id", task.ID, "dispatch_count", dispatchCount)
 		failReason := fmt.Sprintf("Task auto-failed after %d dispatch attempts", dispatchCount)

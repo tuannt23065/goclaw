@@ -78,6 +78,7 @@ func (m *TeamToolManager) FollowupMaxReminders(team *store.TeamData) int {
 const (
 	defaultFollowupDelayMinutes = 30
 	defaultFollowupMaxReminders = 0 // 0 = unlimited
+	defaultMaxDispatchRetries   = 3 // max times a task can be re-dispatched before auto-fail
 )
 
 // followupDelayMinutes returns the team's followup_interval_minutes setting, or the default.
@@ -108,6 +109,21 @@ func (m *TeamToolManager) followupMaxReminders(team *store.TeamData) int {
 		return int(v)
 	}
 	return defaultFollowupMaxReminders
+}
+
+// maxDispatchRetries returns the team's max_dispatch_retries setting, or the default (3).
+func (m *TeamToolManager) maxDispatchRetries(team *store.TeamData) int {
+	if team == nil || team.Settings == nil {
+		return defaultMaxDispatchRetries
+	}
+	var settings map[string]any
+	if json.Unmarshal(team.Settings, &settings) != nil {
+		return defaultMaxDispatchRetries
+	}
+	if v, ok := settings["max_dispatch_retries"].(float64); ok && v >= 1 {
+		return int(v)
+	}
+	return defaultMaxDispatchRetries
 }
 
 // ============================================================

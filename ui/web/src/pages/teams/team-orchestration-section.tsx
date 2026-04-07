@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
-import { ShieldAlert, Clock, FolderLock, FolderSync } from "lucide-react";
+import { ShieldAlert, Clock, FolderLock, FolderSync, RefreshCw } from "lucide-react";
 
 interface TeamOrchestrationSectionProps {
   workspaceScope: string;
@@ -15,6 +15,8 @@ interface TeamOrchestrationSectionProps {
   setFollowupInterval: (v: number) => void;
   followupMaxReminders: number;
   setFollowupMaxReminders: (v: number) => void;
+  maxDispatchRetries: number;
+  setMaxDispatchRetries: (v: number) => void;
 }
 
 const WORKSPACE_OPTIONS = [
@@ -30,6 +32,7 @@ export function TeamOrchestrationSection({
   blockerEscalationEnabled, setBlockerEscalationEnabled,
   followupInterval, setFollowupInterval,
   followupMaxReminders, setFollowupMaxReminders,
+  maxDispatchRetries, setMaxDispatchRetries,
 }: TeamOrchestrationSectionProps) {
   const { t } = useTranslation("teams");
 
@@ -111,6 +114,28 @@ export function TeamOrchestrationSection({
                 </div>
                 <Switch checked={blockerEscalationEnabled} onCheckedChange={setBlockerEscalationEnabled} />
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Dispatch Retries */}
+      <div className="space-y-4">
+        <h3 className="text-sm font-medium">{t("settings.dispatchRetries")}</h3>
+        <div className="rounded-lg border bg-gradient-to-r from-blue-500/5 to-indigo-500/5 p-4">
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-blue-500/10 p-2.5 text-blue-600 dark:text-blue-400">
+              <RefreshCw className="h-5 w-5" />
+            </div>
+            <div className="flex-1 space-y-1.5">
+              <label className="text-sm font-medium">{t("settings.maxDispatchRetries")}</label>
+              <p className="text-xs text-muted-foreground leading-relaxed">{t("settings.maxDispatchRetriesHint")}</p>
+              <input
+                type="number" min={1} max={20}
+                value={maxDispatchRetries}
+                onChange={(e) => setMaxDispatchRetries(Math.max(1, parseInt(e.target.value) || 3))}
+                className="w-24 rounded-md border bg-background px-3 py-1.5 text-base md:text-sm"
+              />
             </div>
           </div>
         </div>

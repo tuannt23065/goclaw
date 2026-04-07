@@ -19,6 +19,7 @@ type teamAccessSettings struct {
 	FollowupMaxReminders  *int     `json:"followup_max_reminders,omitempty"`
 	EscalationMode        string   `json:"escalation_mode,omitempty"`
 	EscalationActions     []string `json:"escalation_actions,omitempty"`
+	MaxDispatchRetries    *int     `json:"max_dispatch_retries,omitempty"`
 }
 
 // checkTeamAccess validates whether a user/channel combination is authorized

@@ -310,6 +310,7 @@ func (m *TeamsMethods) handleUpdate(ctx context.Context, client *gateway.Client,
 		FollowupMaxReminders  *int     `json:"followup_max_reminders,omitempty"`
 		EscalationMode        string   `json:"escalation_mode,omitempty"`
 		EscalationActions     []string `json:"escalation_actions,omitempty"`
+		MaxDispatchRetries    *int     `json:"max_dispatch_retries,omitempty"`
 		WorkspaceScope        string   `json:"workspace_scope,omitempty"`
 		WorkspaceQuotaMB      *int     `json:"workspace_quota_mb,omitempty"`
 		Notifications         *struct {
