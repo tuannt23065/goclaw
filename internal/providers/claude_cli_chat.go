@@ -39,14 +39,9 @@ func (p *ClaudeCLIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	disableTools := extractBoolOpt(req.Options, OptDisableTools)
 	bc := bridgeContextFromOpts(req.Options)
 	mcpPath := p.resolveMCPConfigPath(ctx, sessionKey, bc)
-	// Claude CLI >= v2.1.87 requires matching input/output formats.
-	// When images are present, buildArgs adds --input-format stream-json,
-	// so output format must also be stream-json.
-	outputFmt := "json"
-	if len(images) > 0 {
-		outputFmt = "stream-json"
-	}
-	args := p.buildArgs(model, workDir, mcpPath, cliSessionID, outputFmt, len(images) > 0, disableTools)
+	// Always use stream-json output so stdout is line-by-line (realtime debug logs).
+	// Claude CLI >= v2.1.87 requires matching input/output formats when images are present.
+	args := p.buildArgs(model, workDir, mcpPath, cliSessionID, "stream-json", len(images) > 0, disableTools)
 
 	var stdin *bytes.Reader
 	if len(images) > 0 {
@@ -56,48 +51,77 @@ func (p *ClaudeCLIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	}
 
 	cmd := exec.CommandContext(ctx, p.cliPath, args...)
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = workDir
 	cmd.Env = filterCLIEnv(os.Environ())
 	if stdin != nil {
 		cmd.Stdin = stdin
 	}
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("claude-cli stdout pipe: %w", err)
+	}
 
 	fullCmd := fmt.Sprintf("%s %s", p.cliPath, strings.Join(args, " "))
 	slog.Debug("claude-cli exec", "cmd", fullCmd, "workdir", workDir)
 
 	start := time.Now()
-	output, err := cmd.Output()
-	elapsed := time.Since(start)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("claude-cli start: %w", err)
+	}
 
-	// Debug log file (same as ChatStream): timestamped per-run file when GOCLAW_DEBUG=1
+	// Debug log file: realtime write so tool calls survive kill/crash.
+	var debugFile *os.File
 	if os.Getenv("GOCLAW_DEBUG") == "1" {
 		debugLogDir := filepath.Join(workDir, "debug-logs")
 		_ = os.MkdirAll(debugLogDir, 0755)
 		agentName := extractAgentName(sessionKey)
 		ts := start.Format("20060102-150405")
 		debugLogPath := filepath.Join(debugLogDir, fmt.Sprintf("%s_%s_%s.log", agentName, model, ts))
-		if f, ferr := os.OpenFile(debugLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600); ferr == nil {
-			fmt.Fprintf(f, "=== CMD: %s\n=== WORKDIR: %s\n=== TIME: %s\n=== SESSION: %s\n=== DURATION: %s\n\n", fullCmd, workDir, start.Format(time.RFC3339), sessionKey, elapsed)
-			f.Write(output)
-			if stderr.Len() > 0 {
-				fmt.Fprintf(f, "\n=== STDERR:\n%s\n", stderr.String())
-			}
-			if err != nil {
-				fmt.Fprintf(f, "\n=== EXIT ERROR: %v\n", err)
-			}
-			f.Close()
-			go pruneDebugLogs(p.baseWorkDir)
+		debugFile, _ = os.OpenFile(debugLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if debugFile != nil {
+			fmt.Fprintf(debugFile, "=== CMD: %s\n=== WORKDIR: %s\n=== TIME: %s\n=== SESSION: %s\n\n", fullCmd, workDir, start.Format(time.RFC3339), sessionKey)
 		}
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("claude-cli: %w (stderr: %s)", err, stderr.String())
+	// Read stdout line-by-line, collecting output and writing debug log realtime.
+	var output bytes.Buffer
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, StdioScanBufInit), StdioScanBufMax)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		output.Write(line)
+		output.WriteByte('\n')
+		if debugFile != nil {
+			fmt.Fprintf(debugFile, "%s\n", line)
+		}
 	}
 
-	return parseJSONResponse(output)
+	waitErr := cmd.Wait()
+	elapsed := time.Since(start)
+
+	// Write footer to debug log
+	if debugFile != nil {
+		fmt.Fprintf(debugFile, "\n=== DURATION: %s\n", elapsed)
+		if stderrBuf.Len() > 0 {
+			fmt.Fprintf(debugFile, "\n=== STDERR:\n%s\n", stderrBuf.String())
+		}
+		if waitErr != nil {
+			fmt.Fprintf(debugFile, "\n=== EXIT ERROR: %v\n", waitErr)
+		}
+		debugFile.Close()
+		go pruneDebugLogs(p.baseWorkDir)
+	}
+
+	if waitErr != nil {
+		return nil, fmt.Errorf("claude-cli: %w (stderr: %s)", waitErr, stderrBuf.String())
+	}
+
+	return parseJSONResponse(output.Bytes())
 }
 
 // ChatStream runs the CLI with stream-json output, calling onChunk for each text delta.
