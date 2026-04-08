@@ -3,8 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
-	"log/slog"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,7 +118,7 @@ func (t *BridgeTool) Execute(ctx context.Context, args map[string]any) *tools.Re
 
 	result, err := t.client.CallTool(callCtx, req)
 	if err != nil {
-		if callCtx.Err() == context.DeadlineExceeded {
+		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
 			return tools.ErrorResult(fmt.Sprintf("MCP tool %q timeout after %ds", t.registeredName, t.timeoutSec))
 		}
 		return tools.ErrorResult(fmt.Sprintf("MCP tool %q error: %v", t.registeredName, err))
