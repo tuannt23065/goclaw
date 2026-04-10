@@ -14,6 +14,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
+	"github.com/nextlevelbuilder/goclaw/internal/workspace"
 )
 
 // contextSetupResult holds the outputs of injectContext that are needed by the main loop.
@@ -61,6 +62,10 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	// Inject original sender ID for group file writer permission checks
 	if req.SenderID != "" {
 		ctx = store.WithSenderID(ctx, req.SenderID)
+	}
+	// Inject sender display name for bootstrap auto-contact
+	if req.SenderName != "" {
+		ctx = store.WithSenderName(ctx, req.SenderName)
 	}
 	// Inject global builtin tool settings for media tools (provider chain)
 	if l.builtinToolSettings != nil {
@@ -110,7 +115,8 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	// Seeding must run before buildMessages→resolveContextFiles reads context files.
 	// Team sessions skip seeding: members process tasks from leader, not end-user onboarding.
 	isTeamSession := bootstrap.IsTeamSession(req.SessionKey)
-	setup := l.getOrCreateUserSetup(ctx, req.UserID, req.Channel, isTeamSession)
+	channelMeta := l.buildChannelMeta(req)
+	setup := l.getOrCreateUserSetup(ctx, req.UserID, req.Channel, isTeamSession, channelMeta)
 
 	// Workspace resolution (layered pipeline).
 	// Layer order: tenant → team → project (future) → user/chat
@@ -181,6 +187,39 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 			if req.TeamID == "" {
 				ctx = tools.WithToolTeamID(ctx, team.ID.String())
 			}
+		}
+	}
+
+	// V3 workspace: resolve once, set immutable context.
+	{
+		var teamIDPtr *string
+		if req.TeamID != "" {
+			teamIDPtr = &req.TeamID
+		}
+		var teamWSConfig *workspace.TeamWorkspaceConfig
+		if resolvedTeamSettings != nil {
+			var cfg workspace.TeamWorkspaceConfig
+			if json.Unmarshal(resolvedTeamSettings, &cfg) == nil {
+				teamWSConfig = &cfg
+			}
+		}
+		resolver := workspace.NewResolver()
+		wc, wsErr := resolver.Resolve(ctx, workspace.ResolveParams{
+			AgentID:    l.agentUUID.String(),
+			AgentType:  l.agentType,
+			UserID:     req.UserID,
+			ChatID:     req.ChatID,
+			TenantID:   store.TenantIDFromContext(ctx).String(),
+			TenantSlug: store.TenantSlugFromContext(ctx),
+			PeerKind:   req.PeerKind,
+			TeamID:    teamIDPtr,
+			TeamConfig: teamWSConfig,
+			BaseDir:   l.dataDir,
+		})
+		if wsErr != nil {
+			slog.Warn("workspace resolution failed", "err", wsErr)
+		} else {
+			ctx = workspace.WithContext(ctx, wc)
 		}
 	}
 

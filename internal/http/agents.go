@@ -30,6 +30,12 @@ type AgentsHandler struct {
 	tracingStore     store.TracingStore
 	memoryStore      store.MemoryStore         // for import (nil = disabled)
 	kgStore          store.KnowledgeGraphStore // for import (nil = disabled)
+	episodicStore    store.EpisodicStore       // for import (nil in SQLite/lite builds)
+	vaultStore       store.VaultStore          // for vault import (nil = disabled)
+	toolsReg         ToolLister                // for system prompt preview tool resolution (nil = fallback)
+	skillsLoader     SkillPinnedBuilder        // for system prompt preview pinned skills (nil = skip)
+	teamStore        store.TeamStore           // for system prompt preview team context (nil = skip)
+	agentLinkStore   store.AgentLinkStore      // for system prompt preview delegation targets (nil = skip)
 	defaultWorkspace string                   // default workspace path template (e.g. "~/.goclaw/workspace")
 	dataDir          string                   // resolved data directory (e.g. "~/.goclaw/data") — for team workspace export
 	msgBus           *bus.MessageBus          // for cache invalidation events (nil = no events)
@@ -64,6 +70,38 @@ func (h *AgentsHandler) SetImportStores(mem store.MemoryStore, kg store.Knowledg
 	h.kgStore = kg
 }
 
+// SetEpisodicStore attaches the episodic store for Tier 2 memory import.
+// Not available in SQLite/lite builds — nil is safe (episodic import is skipped).
+func (h *AgentsHandler) SetEpisodicStore(ep store.EpisodicStore) {
+	h.episodicStore = ep
+}
+
+// SetVaultStore attaches the vault store for Knowledge Vault import.
+// nil is safe — vault import is skipped when not set.
+func (h *AgentsHandler) SetVaultStore(vs store.VaultStore) {
+	h.vaultStore = vs
+}
+
+// ToolLister is satisfied by tools.Registry for system prompt preview.
+type ToolLister interface{ List() []string }
+
+// SkillPinnedBuilder is satisfied by skills.Loader for pinned skills summary.
+type SkillPinnedBuilder interface {
+	BuildPinnedSummary(ctx context.Context, names []string) string
+}
+
+// SetPreviewDeps attaches optional dependencies for system prompt preview.
+func (h *AgentsHandler) SetPreviewDeps(tl ToolLister, sl SkillPinnedBuilder) {
+	h.toolsReg = tl
+	h.skillsLoader = sl
+}
+
+// SetPreviewStores attaches team + agent link stores for system prompt preview.
+func (h *AgentsHandler) SetPreviewStores(ts store.TeamStore, als store.AgentLinkStore) {
+	h.teamStore = ts
+	h.agentLinkStore = als
+}
+
 // isOwnerUser checks if the given user ID is a system owner.
 func (h *AgentsHandler) isOwnerUser(userID string) bool {
 	return userID != "" && h.isOwner != nil && h.isOwner(userID)
@@ -96,6 +134,7 @@ func (h *AgentsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/agents/{id}/regenerate", h.adminMiddleware(h.handleRegenerate))
 	mux.HandleFunc("POST /v1/agents/{id}/resummon", h.adminMiddleware(h.handleResummon))
 	// Export (agent owner or system owner)
+	mux.HandleFunc("GET /v1/agents/{id}/system-prompt-preview", h.adminMiddleware(h.handleSystemPromptPreview))
 	mux.HandleFunc("GET /v1/agents/{id}/export/preview", h.authMiddleware(h.handleExportPreview))
 	mux.HandleFunc("GET /v1/agents/{id}/export", h.authMiddleware(h.handleExport))
 	mux.HandleFunc("GET /v1/agents/{id}/export/download/{token}", h.authMiddleware(h.handleExportDownload))
@@ -160,8 +199,7 @@ func (h *AgentsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req store.AgentData
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidRequest, err.Error()))
+	if !bindJSON(w, r, locale, &req) {
 		return
 	}
 
@@ -187,8 +225,8 @@ func (h *AgentsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		req.TenantID = store.TenantIDFromContext(r.Context())
 	}
 
-	if req.AgentType == "" {
-		req.AgentType = store.AgentTypeOpen
+	if req.AgentType == "" || req.AgentType == store.AgentTypeOpen {
+		req.AgentType = store.AgentTypePredefined // v3: open agents deprecated, default to predefined
 	}
 	if req.ContextWindow <= 0 {
 		req.ContextWindow = config.DefaultContextWindow
@@ -210,7 +248,7 @@ func (h *AgentsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if predefined agent has a description for LLM summoning
-	description := extractDescription(req.OtherConfig)
+	description := req.AgentDescription
 	if req.AgentType == store.AgentTypePredefined && description != "" && h.summoner != nil {
 		req.Status = store.AgentStatusSummoning
 	} else if req.Status == "" {
@@ -313,8 +351,7 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var updates map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		writeError(w, http.StatusBadRequest, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidRequest, err.Error()))
+	if !bindJSON(w, r, locale, &updates) {
 		return
 	}
 
@@ -322,6 +359,17 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	// Defense-in-depth against column injection via arbitrary JSON keys.
 	allowed := filterAllowedKeys(updates, agentAllowedFields)
 	allowed["restrict_to_workspace"] = true
+
+	// Validate v3 flag values in other_config (must be boolean).
+	if oc, ok := allowed["other_config"]; ok && oc != nil {
+		switch v := oc.(type) {
+		case map[string]any:
+			if err := store.ValidateV3Flags(v); err != nil {
+				writeError(w, http.StatusBadRequest, protocol.ErrInvalidRequest, err.Error())
+				return
+			}
+		}
+	}
 
 	validationProvider := ag.Provider
 	if providerName, ok := allowed["provider"].(string); ok && providerName != "" {
@@ -336,6 +384,14 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		validationAgent.OtherConfig = rawOtherConfig
+	}
+	if routing, ok := allowed["chatgpt_oauth_routing"]; ok {
+		rawRouting, err := marshalJSONRaw(routing)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidJSON))
+			return
+		}
+		validationAgent.ChatGPTOAuthRouting = rawRouting
 	}
 
 	if err := validateChatGPTOAuthAgentRouting(
