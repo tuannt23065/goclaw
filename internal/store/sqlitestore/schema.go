@@ -15,7 +15,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 13
+const SchemaVersion = 15
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -374,6 +374,44 @@ ALTER TABLE episodic_summaries ADD COLUMN recall_score REAL NOT NULL DEFAULT 0;
 ALTER TABLE episodic_summaries ADD COLUMN last_recalled_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_episodic_recall_unpromoted ON episodic_summaries(agent_id, user_id, recall_score DESC)
     WHERE promoted_at IS NULL;`,
+
+	// Version 13 → 14: vault_documents agent_id nullable + unique index with tenant_id.
+	// SQLite requires table recreation to drop NOT NULL. Preserve all data.
+	13: `CREATE TABLE vault_documents_new (
+    id           TEXT NOT NULL PRIMARY KEY,
+    tenant_id    TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    team_id      TEXT REFERENCES agent_teams(id) ON DELETE SET NULL,
+    scope        TEXT NOT NULL DEFAULT 'personal',
+    custom_scope TEXT,
+    path         TEXT NOT NULL,
+    title        TEXT NOT NULL DEFAULT '',
+    doc_type     TEXT NOT NULL DEFAULT 'note',
+    content_hash TEXT NOT NULL DEFAULT '',
+    summary      TEXT NOT NULL DEFAULT '',
+    metadata     TEXT DEFAULT '{}',
+    created_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+INSERT INTO vault_documents_new SELECT * FROM vault_documents;
+DROP TABLE vault_documents;
+ALTER TABLE vault_documents_new RENAME TO vault_documents;
+DROP INDEX IF EXISTS idx_vault_docs_unique_path;
+CREATE UNIQUE INDEX idx_vault_docs_unique_path
+    ON vault_documents(tenant_id, COALESCE(agent_id, ''), COALESCE(team_id, ''), scope, path);
+CREATE INDEX IF NOT EXISTS idx_vault_docs_tenant ON vault_documents(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_vault_docs_agent_scope ON vault_documents(agent_id, scope);
+CREATE INDEX IF NOT EXISTS idx_vault_docs_type ON vault_documents(agent_id, doc_type);
+CREATE INDEX IF NOT EXISTS idx_vault_docs_hash ON vault_documents(content_hash);
+CREATE INDEX IF NOT EXISTS idx_vault_docs_team ON vault_documents(team_id);`,
+
+	// Version 14 → 15: cron_jobs UNIQUE constraint on (agent_id, tenant_id, name).
+	// Dedup first: keep one row per combo (SQLite has no DISTINCT ON — use GROUP BY + MIN).
+	14: `DELETE FROM cron_jobs WHERE id NOT IN (
+  SELECT MIN(id) FROM cron_jobs GROUP BY agent_id, tenant_id, name
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cron_jobs_agent_tenant_name
+  ON cron_jobs(agent_id, tenant_id, name);`,
 }
 
 // EnsureSchema creates tables if they don't exist and applies incremental migrations.

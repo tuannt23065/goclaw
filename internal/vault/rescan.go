@@ -12,11 +12,13 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
-// RescanParams holds input for workspace rescan.
+// RescanParams holds input for tenant-wide workspace rescan.
+// AgentMap and TeamSet are pre-loaded by the caller to avoid per-file DB lookups.
 type RescanParams struct {
 	TenantID  string
-	AgentID   string
-	Workspace string // absolute path to agent's workspace root
+	Workspace string            // absolute path to tenant's workspace root
+	AgentMap  map[string]string // agent_key → agent UUID
+	TeamSet   map[string]bool   // team UUID → exists (for validation)
 }
 
 // RescanResult holds the outcome of a workspace rescan.
@@ -30,9 +32,10 @@ type RescanResult struct {
 	Truncated bool `json:"truncated"`
 }
 
-// RescanWorkspace walks the agent workspace and registers missing or changed
-// files in vault_documents. Publishes EventVaultDocUpserted for each new or
-// updated file so the enrichment worker can process them asynchronously.
+// RescanWorkspace walks the tenant workspace and registers missing or changed
+// files in vault_documents. Ownership (agent/team/scope) is inferred from path.
+// Publishes EventVaultDocUpserted for each new or updated file so the
+// enrichment worker can process them asynchronously.
 func RescanWorkspace(ctx context.Context, params RescanParams, vs store.VaultStore, bus eventbus.DomainEventBus) (*RescanResult, error) {
 	entries, walkStats, err := SafeWalkWorkspace(ctx, params.Workspace, DefaultWalkOptions())
 	if err != nil {
@@ -46,33 +49,54 @@ func RescanWorkspace(ctx context.Context, params RescanParams, vs store.VaultSto
 	}
 
 	for _, entry := range entries {
+		agentID, teamID, scope, strippedPath := inferOwnerFromPath(entry.RelPath, params.AgentMap, params.TeamSet)
+		if scope == "" {
+			// Unknown agent key or invalid team UUID — skip.
+			result.Skipped++
+			continue
+		}
+
 		hash, hashErr := ContentHashFile(entry.AbsPath)
 		if hashErr != nil {
 			result.Errors++
 			continue
 		}
 
+		// Resolve the agent ID string for store lookup (empty string = no agent filter).
+		agentIDStr := ""
+		if agentID != nil {
+			agentIDStr = *agentID
+		}
+
+		// Use full workspace-relative path for DB storage and enrichment.
+		// This preserves the real filesystem path (e.g. "teams/{uuid}/system/file.md")
+		// so enrichment worker can locate files via filepath.Join(workspace, path).
+		relPath := entry.RelPath
+
 		// Check if document already exists with same hash.
-		existing, _ := vs.GetDocument(ctx, params.TenantID, params.AgentID, entry.RelPath)
+		// Fallback: also check old stripped path (pre-fix records stored without prefix).
+		existing, _ := vs.GetDocument(ctx, params.TenantID, agentIDStr, relPath)
+		if existing == nil && strippedPath != relPath {
+			existing, _ = vs.GetDocument(ctx, params.TenantID, agentIDStr, strippedPath)
+		}
 		if existing != nil && existing.ContentHash == hash {
 			result.Unchanged++
 			continue
 		}
 
-		scope, teamID := inferScopeFromPath(entry.RelPath)
 		doc := &store.VaultDocument{
 			TenantID:    params.TenantID,
-			AgentID:     params.AgentID,
+			AgentID:     agentID,
 			TeamID:      teamID,
 			Scope:       scope,
-			Path:        entry.RelPath,
-			Title:       InferTitle(entry.RelPath),
-			DocType:     InferDocType(entry.RelPath),
+			Path:        relPath,
+			Title:       InferTitle(relPath),
+			DocType:     InferDocType(relPath),
 			ContentHash: hash,
 		}
 
 		if err := vs.UpsertDocument(ctx, doc); err != nil {
-			slog.Warn("vault.rescan: upsert", "path", entry.RelPath, "err", err)
+			slog.Warn("vault.rescan: upsert", "path", relPath, "err", err)
 			result.Errors++
 			continue
 		}
@@ -83,20 +107,20 @@ func RescanWorkspace(ctx context.Context, params RescanParams, vs store.VaultSto
 			result.New++
 		}
 
-		// Publish enrichment event.
+		// Publish enrichment event. AgentID in payload stays string for serialization.
 		if bus != nil {
 			bus.Publish(eventbus.DomainEvent{
 				ID:        uuid.Must(uuid.NewV7()).String(),
 				Type:      eventbus.EventVaultDocUpserted,
 				SourceID:  doc.ID + ":" + hash,
 				TenantID:  params.TenantID,
-				AgentID:   params.AgentID,
+				AgentID:   agentIDStr,
 				Timestamp: time.Now(),
 				Payload: eventbus.VaultDocUpsertedPayload{
 					DocID:       doc.ID,
 					TenantID:    params.TenantID,
-					AgentID:     params.AgentID,
-					Path:        entry.RelPath,
+					AgentID:     agentIDStr,
+					Path:        relPath,
 					ContentHash: hash,
 					Workspace:   params.Workspace,
 				},
@@ -104,26 +128,57 @@ func RescanWorkspace(ctx context.Context, params RescanParams, vs store.VaultSto
 		}
 	}
 
-	slog.Info("vault.rescan", "agent", params.AgentID,
+	slog.Info("vault.rescan",
+		"tenant", params.TenantID,
 		"scanned", result.Scanned, "new", result.New,
 		"updated", result.Updated, "unchanged", result.Unchanged,
-		"errors", result.Errors, "truncated", result.Truncated)
+		"skipped", result.Skipped, "errors", result.Errors,
+		"truncated", result.Truncated)
 
 	return result, nil
 }
 
-// inferScopeFromPath detects scope and team from workspace-relative path.
-// Paths starting with "teams/{id}/" are team-scoped; everything else is personal.
-func inferScopeFromPath(relPath string) (scope string, teamID *string) {
-	if !strings.HasPrefix(relPath, "teams/") {
-		return "personal", nil
+// inferOwnerFromPath parses a tenant-relative path to determine ownership.
+// Returns: agentID (*string), teamID (*string), scope (string), strippedPath (string).
+//
+// Path patterns:
+//
+//	agents/{agent_key}/rest/of/path → agentID=lookup(key), scope="personal", path="rest/of/path"
+//	teams/{team_uuid}/rest/of/path  → teamID=uuid, scope="team", path="rest/of/path"
+//	anything/else                    → scope="shared", path unchanged
+//
+// Returns scope="" to signal the file should be skipped (unknown agent or invalid team).
+func inferOwnerFromPath(relPath string, agentMap map[string]string, teamSet map[string]bool) (agentID *string, teamID *string, scope string, strippedPath string) {
+	switch {
+	case strings.HasPrefix(relPath, "agents/"):
+		rest := relPath[len("agents/"):]
+		key, remainder, hasSlash := strings.Cut(rest, "/")
+		if !hasSlash || key == "" || strings.Contains(remainder, "..") {
+			return nil, nil, "", relPath // malformed or path traversal
+		}
+		agentUUID, ok := agentMap[key]
+		if !ok {
+			return nil, nil, "", relPath // unknown agent key → skip
+		}
+		return &agentUUID, nil, "personal", remainder
+
+	case strings.HasPrefix(relPath, "teams/"):
+		rest := relPath[len("teams/"):]
+		id, remainder, hasSlash := strings.Cut(rest, "/")
+		if !hasSlash || id == "" || strings.Contains(remainder, "..") {
+			return nil, nil, "", relPath // malformed or path traversal
+		}
+		if _, parseErr := uuid.Parse(id); parseErr != nil {
+			return nil, nil, "", relPath // not a valid UUID → skip
+		}
+		if !teamSet[id] {
+			return nil, nil, "", relPath // team not found → skip
+		}
+		return nil, &id, "team", remainder
+
+	default:
+		return nil, nil, "shared", relPath
 	}
-	rest := relPath[len("teams/"):]
-	id, _, hasSlash := strings.Cut(rest, "/")
-	if !hasSlash || id == "" {
-		return "personal", nil
-	}
-	return "team", &id
 }
 
 // InferDocType guesses doc_type from path conventions.

@@ -61,11 +61,11 @@ export function EvolutionSuggestionsTable({ suggestions, loading, onUpdateStatus
           <table className="w-full text-sm min-w-[600px]">
             <thead>
               <tr className="border-b bg-muted/50 text-left">
-                <th className="px-3 py-2 font-medium">Type</th>
-                <th className="px-3 py-2 font-medium">Suggestion</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Created</th>
-                <th className="px-3 py-2 font-medium text-right">Actions</th>
+                <th className="px-3 py-2 font-medium">{t("detail.evolution.colType")}</th>
+                <th className="px-3 py-2 font-medium">{t("detail.evolution.colSuggestion")}</th>
+                <th className="px-3 py-2 font-medium">{t("detail.evolution.colStatus")}</th>
+                <th className="px-3 py-2 font-medium">{t("detail.evolution.colCreated")}</th>
+                <th className="px-3 py-2 font-medium text-right">{t("detail.evolution.colActions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -144,10 +144,10 @@ export function EvolutionSuggestionsTable({ suggestions, loading, onUpdateStatus
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirm(null)} disabled={acting}>
-              Cancel
+              {t("detail.evolution.cancel")}
             </Button>
             <Button onClick={handleConfirm} disabled={acting}>
-              {acting ? "..." : "Confirm"}
+              {acting ? t("detail.evolution.confirming") : t("detail.evolution.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

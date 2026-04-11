@@ -4,26 +4,41 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/tokencount"
+	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
 // PreviewDeps holds optional dependencies for building a preview system prompt.
 // All fields are nil-safe — missing deps simply skip resolution for that section.
 type PreviewDeps struct {
-	AgentStore    store.AgentStore
-	TeamStore     store.TeamStore
-	AgentLinks    store.AgentLinkStore
-	ProviderReg   *providers.Registry
-	ToolLister    interface{ List() []string }
-	SkillsLoader  interface {
+	AgentStore       store.AgentStore
+	TeamStore        store.TeamStore
+	AgentLinks       store.AgentLinkStore
+	ProviderReg      *providers.Registry
+	SkillAccessStore store.SkillAccessStore
+	ToolLister       interface {
+		List() []string
+		Get(name string) (tools.Tool, bool)
+		Aliases() map[string]string
+	}
+	SkillsLoader interface {
 		BuildPinnedSummary(ctx context.Context, names []string) string
+		BuildSummary(ctx context.Context, allowList []string) string
 	}
 	DataDir string // for team workspace path construction
+}
+
+// PreviewResult holds the output of BuildPreviewPrompt.
+type PreviewResult struct {
+	Prompt   string
+	ToolDefs []providers.ToolDefinition // tool definitions (schemas) as sent to the LLM
 }
 
 // BuildPreviewPrompt builds a system prompt for preview purposes.
@@ -31,7 +46,7 @@ type PreviewDeps struct {
 // fields as possible from agent data + DB stores. Runtime-only fields
 // (channel, peer kind, session context, credentials) are left at zero values —
 // BuildSystemPrompt already nil-checks every field.
-func BuildPreviewPrompt(ctx context.Context, ag *store.AgentData, mode PromptMode, userID string, deps PreviewDeps) string {
+func BuildPreviewPrompt(ctx context.Context, ag *store.AgentData, mode PromptMode, userID string, deps PreviewDeps) PreviewResult {
 	// --- Context files ---
 	var contextFiles []bootstrap.ContextFile
 	if deps.AgentStore != nil {
@@ -62,6 +77,63 @@ func BuildPreviewPrompt(ctx context.Context, ag *store.AgentData, mode PromptMod
 		toolNames = fallbackPreviewToolNames
 	}
 
+	// --- skill_manage gating (matches loop_history.go:124-131) ---
+	if !ag.ParseSkillEvolve() {
+		filtered := make([]string, 0, len(toolNames))
+		for _, n := range toolNames {
+			if n != "skill_manage" {
+				filtered = append(filtered, n)
+			}
+		}
+		toolNames = filtered
+	}
+
+	// --- Basic agent tool policy: deny-only (Allow/AlsoAllow/ByProvider not applied).
+	// Full PolicyEngine requires runtime state (provider name, channel) not available in preview. ---
+	if toolPolicy := ag.ParseToolsConfig(); toolPolicy != nil && len(toolPolicy.Deny) > 0 {
+		denySet := make(map[string]bool, len(toolPolicy.Deny))
+		for _, d := range toolPolicy.Deny {
+			denySet[d] = true
+		}
+		filtered := make([]string, 0, len(toolNames))
+		for _, n := range toolNames {
+			if !denySet[n] {
+				filtered = append(filtered, n)
+			}
+		}
+		toolNames = filtered
+	}
+
+	// --- Alias exclusion (matches loop_history.go:136-146) ---
+	if deps.ToolLister != nil {
+		if aliasSet := deps.ToolLister.Aliases(); len(aliasSet) > 0 {
+			filtered := make([]string, 0, len(toolNames))
+			for _, n := range toolNames {
+				if _, isAlias := aliasSet[n]; !isAlias {
+					filtered = append(filtered, n)
+				}
+			}
+			toolNames = filtered
+		}
+	}
+
+	// --- MCP tool descriptions (matches loop_history_supplement.go:44-58) ---
+	var mcpToolDescs map[string]string
+	if deps.ToolLister != nil {
+		descs := make(map[string]string)
+		for _, name := range toolNames {
+			if !strings.HasPrefix(name, "mcp_") || name == "mcp_tool_search" {
+				continue
+			}
+			if tool, ok := deps.ToolLister.Get(name); ok {
+				descs[name] = tool.Description()
+			}
+		}
+		if len(descs) > 0 {
+			mcpToolDescs = descs
+		}
+	}
+
 	// --- Sandbox ---
 	sandboxCfg := ag.ParseSandboxConfig()
 	sandboxEnabled := sandboxCfg != nil && sandboxCfg.Mode != "" && sandboxCfg.Mode != "off"
@@ -74,6 +146,32 @@ func BuildPreviewPrompt(ctx context.Context, ag *store.AgentData, mode PromptMod
 	var pinnedSummary string
 	if pinnedSkills := ag.ParsePinnedSkills(); len(pinnedSkills) > 0 && deps.SkillsLoader != nil {
 		pinnedSummary = deps.SkillsLoader.BuildPinnedSummary(ctx, pinnedSkills)
+	}
+
+	// --- Skills summary (BuildSummary + token count) ---
+	var skillsSummary string
+	if deps.SkillsLoader != nil {
+		var skillAllowList []string
+		if deps.SkillAccessStore != nil {
+			if accessible, err := deps.SkillAccessStore.ListAccessible(ctx, ag.ID, userID); err == nil {
+				skillAllowList = make([]string, 0, len(accessible))
+				for _, sk := range accessible {
+					skillAllowList = append(skillAllowList, sk.Slug)
+				}
+			} else {
+				// On error: empty list (no skills). Preview is diagnostic; safer than showing all.
+				skillAllowList = []string{}
+			}
+		}
+
+		summary := deps.SkillsLoader.BuildSummary(ctx, skillAllowList)
+		if summary != "" {
+			tokens := tokencount.NewFallbackCounter().Count("claude-3", summary)
+			if tokens <= skillInlineMaxTokens {
+				skillsSummary = summary
+			}
+			// Over threshold → search-only mode (skillsSummary stays empty)
+		}
 	}
 
 	// --- Provider contribution ---
@@ -121,8 +219,31 @@ func BuildPreviewPrompt(ctx context.Context, ag *store.AgentData, mode PromptMod
 		}
 	}
 
+	// --- Tool definitions (schemas sent to LLM alongside the system prompt) ---
+	var toolDefs []providers.ToolDefinition
+	if deps.ToolLister != nil {
+		for _, name := range toolNames {
+			if tool, ok := deps.ToolLister.Get(name); ok {
+				toolDefs = append(toolDefs, tools.ToProviderDef(tool))
+			}
+		}
+		// Include alias definitions (LLM receives both canonical + aliases)
+		for alias, canonical := range deps.ToolLister.Aliases() {
+			if tool, ok := deps.ToolLister.Get(canonical); ok {
+				toolDefs = append(toolDefs, providers.ToolDefinition{
+					Type: "function",
+					Function: providers.ToolFunctionSchema{
+						Name:        alias,
+						Description: tool.Description(),
+						Parameters:  tool.Parameters(),
+					},
+				})
+			}
+		}
+	}
+
 	// --- Build system prompt (same function as LLM pipeline) ---
-	return BuildSystemPrompt(SystemPromptConfig{
+	prompt := BuildSystemPrompt(SystemPromptConfig{
 		AgentID:              ag.AgentKey,
 		AgentUUID:            ag.ID.String(),
 		DisplayName:          ag.DisplayName,
@@ -146,6 +267,8 @@ func BuildPreviewPrompt(ctx context.Context, ag *store.AgentData, mode PromptMod
 		SandboxEnabled:       sandboxEnabled,
 		SandboxContainerDir:  sandboxContainerDir,
 		PinnedSkillsSummary:  pinnedSummary,
+		SkillsSummary:        skillsSummary,
+		MCPToolDescs:         mcpToolDescs,
 		IsTeamContext:        isTeamCtx,
 		TeamWorkspace:        teamWorkspace,
 		TeamMembers:          teamMembers,
@@ -154,8 +277,9 @@ func BuildPreviewPrompt(ctx context.Context, ag *store.AgentData, mode PromptMod
 		OrchMode:             orchMode,
 		// Runtime-only fields left at zero: Channel, ChannelType, ChatTitle,
 		// PeerKind, OwnerIDs, ExtraPrompt, CredentialCLIContext, IsBootstrap,
-		// MCPToolDescs, SkillsSummary, SandboxWorkspaceAccess
+		// SandboxWorkspaceAccess
 	})
+	return PreviewResult{Prompt: prompt, ToolDefs: toolDefs}
 }
 
 // mergePreviewUserFiles overlays per-user files onto base agent-level files.

@@ -5,6 +5,7 @@
   "searchPlaceholder": "Tìm tài liệu...",
   "filterAgent": "Agent",
   "allAgents": "Tất cả agent",
+  "allTypes": "Tất cả",
   "noDocuments": "Không có tài liệu trong kho",
   "noResults": "Không có kết quả",
   "searchFailed": "Tìm kiếm thất bại",
@@ -36,7 +37,8 @@
     "noLinks": "Không có liên kết",
     "contentPreview": "Xem nội dung",
     "fileNotFound": "Không tìm thấy tệp",
-    "emptyContent": "Không có nội dung"
+    "emptyContent": "Không có nội dung",
+    "binaryFile": "Tệp nhị phân — không thể xem trước"
   },
   "fields": {
     "title": "Tiêu đề",
@@ -62,9 +64,12 @@
     "memory": "Bộ nhớ",
     "note": "Ghi chú",
     "skill": "Kỹ năng",
-    "episodic": "Giai thoại"
+    "episodic": "Giai thoại",
+    "media": "Media"
   },
   "rescanTooltip": "Quét lại workspace",
+  "enriching": "Đang xử lý",
+  "enrichComplete": "Xử lý hoàn tất",
   "rescanNew": "{{count}} mới",
   "rescanUpdated": "{{count}} cập nhật",
   "rescanUnchanged": "{{count}} không đổi",
@@ -72,7 +77,23 @@
   "rescanNoFiles": "Không tìm thấy file mới",
   "rescanBusy": "Đang quét, vui lòng đợi",
   "rescanError": "Quét thất bại",
+  "upload": {
+    "title": "Tải lên Kho Tri Thức",
+    "destination": "Đích đến",
+    "shared": "Chia sẻ",
+    "agent": "Agent",
+    "team": "Nhóm",
+    "selectAgent": "Chọn agent...",
+    "selectTeam": "Chọn nhóm...",
+    "dropzone": "Kéo thả file vào đây hoặc nhấn để chọn",
+    "dropzoneHint": "Chỉ file văn bản (.md, .txt, .json, .yaml, .csv, ...)",
+    "files": "File ({{count}})",
+    "uploading": "Đang tải lên...",
+    "upload": "Tải lên"
+  },
   "toast": {
+    "uploadSuccess": "Đã tải lên {{count}} file",
+    "uploadFailed": "Tải lên thất bại",
     "docCreated": "Đã tạo tài liệu",
     "docCreateFailed": "Tạo tài liệu thất bại",
     "docUpdated": "Đã cập nhật tài liệu",

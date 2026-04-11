@@ -54,10 +54,19 @@ func (s *PGVaultStore) SetEmbeddingProvider(provider store.EmbeddingProvider) {
 
 func (s *PGVaultStore) Close() error { return nil }
 
+// optAgentUUID converts a nullable *string agent_id to *uuid.UUID for SQL.
+func optAgentUUID(agentID *string) *uuid.UUID {
+	if agentID == nil || *agentID == "" {
+		return nil
+	}
+	u := mustParseUUID(*agentID)
+	return &u
+}
+
 // UpsertDocument inserts or updates a vault document.
 func (s *PGVaultStore) UpsertDocument(ctx context.Context, doc *store.VaultDocument) error {
 	tid := mustParseUUID(doc.TenantID)
-	aid := mustParseUUID(doc.AgentID)
+	aid := optAgentUUID(doc.AgentID)
 	now := time.Now().UTC()
 
 	meta, err := json.Marshal(doc.Metadata)
@@ -91,7 +100,7 @@ func (s *PGVaultStore) UpsertDocument(ctx context.Context, doc *store.VaultDocum
 		INSERT INTO vault_documents
 			(id, tenant_id, agent_id, team_id, scope, custom_scope, path, title, doc_type, content_hash, summary, embedding, metadata, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
-		ON CONFLICT (agent_id, COALESCE(team_id, '00000000-0000-0000-0000-000000000000'), scope, path) DO UPDATE SET
+		ON CONFLICT (tenant_id, COALESCE(agent_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(team_id, '00000000-0000-0000-0000-000000000000'::uuid), scope, path) DO UPDATE SET
 			title        = EXCLUDED.title,
 			doc_type     = EXCLUDED.doc_type,
 			content_hash = EXCLUDED.content_hash,
@@ -112,15 +121,21 @@ func (s *PGVaultStore) UpsertDocument(ctx context.Context, doc *store.VaultDocum
 }
 
 // GetDocument retrieves a vault document by tenant, agent, and path.
+// Empty agentID means no agent filter (match any agent).
 // Team scoping via RunContext: present+TeamID → filter; present+empty → personal; nil → any match.
 func (s *PGVaultStore) GetDocument(ctx context.Context, tenantID, agentID, path string) (*store.VaultDocument, error) {
 	tid := mustParseUUID(tenantID)
-	aid := mustParseUUID(agentID)
 
 	q := `SELECT id, tenant_id, agent_id, team_id, scope, custom_scope, path, title, doc_type, content_hash, summary, metadata, created_at, updated_at
-		FROM vault_documents WHERE tenant_id = $1 AND agent_id = $2 AND path = $3`
-	args := []any{tid, aid, path}
-	p := 4
+		FROM vault_documents WHERE tenant_id = $1 AND path = $2`
+	args := []any{tid, path}
+	p := 3
+
+	if agentID != "" {
+		q += fmt.Sprintf(" AND agent_id = $%d", p)
+		args = append(args, mustParseUUID(agentID))
+		p++
+	}
 
 	if rc := store.RunContextFromCtx(ctx); rc != nil {
 		if rc.TeamID != "" {
@@ -161,15 +176,72 @@ func (s *PGVaultStore) GetDocumentByID(ctx context.Context, tenantID, id string)
 	return &doc, nil
 }
 
+// GetDocumentsByIDs returns documents matching the given IDs with tenant isolation.
+// Chunks by 500 to stay within PG param limits.
+func (s *PGVaultStore) GetDocumentsByIDs(ctx context.Context, tenantID string, docIDs []string) ([]store.VaultDocument, error) {
+	if len(docIDs) == 0 {
+		return nil, nil
+	}
+	tid := mustParseUUID(tenantID)
+	const chunkSize = 500
+	var all []store.VaultDocument
+	for start := 0; start < len(docIDs); start += chunkSize {
+		end := min(start+chunkSize, len(docIDs))
+		var scanned []vaultDocRow
+		if err := pkgSqlxDB.SelectContext(ctx, &scanned,
+			`SELECT id, tenant_id, agent_id, team_id, scope, custom_scope, path, title, doc_type, content_hash, summary, metadata, created_at, updated_at
+			 FROM vault_documents WHERE id = ANY($1) AND tenant_id = $2`,
+			pqStringArray(docIDs[start:end]), tid); err != nil {
+			return nil, err
+		}
+		for i := range scanned {
+			all = append(all, scanned[i].toVaultDocument())
+		}
+	}
+	return all, nil
+}
+
+// GetDocumentByBasename finds a document by path basename (case-insensitive).
+// Uses the stored generated column path_basename + index for fast lookup.
+func (s *PGVaultStore) GetDocumentByBasename(ctx context.Context, tenantID, agentID, basename string) (*store.VaultDocument, error) {
+	tid := mustParseUUID(tenantID)
+	q := `SELECT id, tenant_id, agent_id, team_id, scope, custom_scope, path, title, doc_type, content_hash, summary, metadata, created_at, updated_at
+		FROM vault_documents
+		WHERE tenant_id = $1 AND path_basename = lower($2)`
+	args := []any{tid, basename}
+	p := 3
+	if agentID != "" {
+		q += fmt.Sprintf(" AND agent_id = $%d", p)
+		args = append(args, mustParseUUID(agentID))
+	}
+	q += " LIMIT 1"
+	var row vaultDocRow
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(
+		&row.ID, &row.TenantID, &row.AgentID, &row.TeamID, &row.Scope, &row.CustomScope,
+		&row.Path, &row.Title, &row.DocType, &row.ContentHash, &row.Summary,
+		&row.MetaJSON, &row.CreatedAt, &row.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	doc := row.toVaultDocument()
+	return &doc, nil
+}
+
 // DeleteDocument removes a vault document by tenant, agent, and path.
+// Empty agentID means no agent filter.
 // Team scoping via RunContext (same rules as GetDocument).
 func (s *PGVaultStore) DeleteDocument(ctx context.Context, tenantID, agentID, path string) error {
 	tid := mustParseUUID(tenantID)
-	aid := mustParseUUID(agentID)
 
-	q := `DELETE FROM vault_documents WHERE tenant_id = $1 AND agent_id = $2 AND path = $3`
-	args := []any{tid, aid, path}
-	p := 4
+	q := `DELETE FROM vault_documents WHERE tenant_id = $1 AND path = $2`
+	args := []any{tid, path}
+	p := 3
+
+	if agentID != "" {
+		q += fmt.Sprintf(" AND agent_id = $%d", p)
+		args = append(args, mustParseUUID(agentID))
+		p++
+	}
 
 	if rc := store.RunContextFromCtx(ctx); rc != nil {
 		if rc.TeamID != "" {
@@ -287,7 +359,7 @@ func (s *PGVaultStore) UpdateHash(ctx context.Context, tenantID, id, newHash str
 // Search performs hybrid FTS + vector search on vault_documents.
 func (s *PGVaultStore) Search(ctx context.Context, opts store.VaultSearchOptions) ([]store.VaultSearchResult, error) {
 	tid := mustParseUUID(opts.TenantID)
-	aid := mustParseUUID(opts.AgentID)
+	aid := optAgentUUID(&opts.AgentID) // empty string → nil → no agent filter
 
 	// Build team filter for search sub-queries.
 	tf := buildSearchTeamFilter(opts.TeamID, opts.TeamIDs)
@@ -381,13 +453,19 @@ func (tf searchTeamFilter) append(q string, args []any, p int) (string, []any, i
 	return q, args, p
 }
 
-func (s *PGVaultStore) ftsSearch(ctx context.Context, query string, tenantID, agentID uuid.UUID, tf searchTeamFilter, scope string, docTypes []string, limit int) ([]store.VaultSearchResult, error) {
+func (s *PGVaultStore) ftsSearch(ctx context.Context, query string, tenantID uuid.UUID, agentID *uuid.UUID, tf searchTeamFilter, scope string, docTypes []string, limit int) ([]store.VaultSearchResult, error) {
 	q := `SELECT id, tenant_id, agent_id, team_id, scope, custom_scope, path, title, doc_type, content_hash, summary, metadata, created_at, updated_at,
 			ts_rank(tsv, plainto_tsquery('simple', $1)) AS score
 		FROM vault_documents
-		WHERE tenant_id = $2 AND agent_id = $3 AND tsv @@ plainto_tsquery('simple', $1)`
-	args := []any{query, tenantID, agentID}
-	p := 4
+		WHERE tenant_id = $2 AND tsv @@ plainto_tsquery('simple', $1)`
+	args := []any{query, tenantID}
+	p := 3
+
+	if agentID != nil {
+		q += fmt.Sprintf(" AND agent_id = $%d", p)
+		args = append(args, *agentID)
+		p++
+	}
 
 	q, args, p = tf.append(q, args, p)
 
@@ -412,14 +490,20 @@ func (s *PGVaultStore) ftsSearch(ctx context.Context, query string, tenantID, ag
 	return vaultSearchRowsToResults(scanned, "vault"), nil
 }
 
-func (s *PGVaultStore) vectorSearch(ctx context.Context, embedding []float32, tenantID, agentID uuid.UUID, tf searchTeamFilter, scope string, docTypes []string, limit int) ([]store.VaultSearchResult, error) {
+func (s *PGVaultStore) vectorSearch(ctx context.Context, embedding []float32, tenantID uuid.UUID, agentID *uuid.UUID, tf searchTeamFilter, scope string, docTypes []string, limit int) ([]store.VaultSearchResult, error) {
 	vecStr := vectorToString(embedding)
 	q := `SELECT id, tenant_id, agent_id, team_id, scope, custom_scope, path, title, doc_type, content_hash, summary, metadata, created_at, updated_at,
 			1 - (embedding <=> $1) AS score
 		FROM vault_documents
-		WHERE tenant_id = $2 AND agent_id = $3 AND embedding IS NOT NULL`
-	args := []any{vecStr, tenantID, agentID}
-	p := 4
+		WHERE tenant_id = $2 AND embedding IS NOT NULL`
+	args := []any{vecStr, tenantID}
+	p := 3
+
+	if agentID != nil {
+		q += fmt.Sprintf(" AND agent_id = $%d", p)
+		args = append(args, *agentID)
+		p++
+	}
 
 	q, args, p = tf.append(q, args, p)
 

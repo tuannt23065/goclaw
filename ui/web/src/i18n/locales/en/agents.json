@@ -273,7 +273,19 @@
       "confirmRollback": "Revert this applied suggestion?",
       "confirmDescription": "This action will update the suggestion status.",
       "notEnabled": "Evolution not enabled",
-      "notEnabledHint": "Enable 'Evolution Metrics' in the Evolution section of the Agent tab to start recording metrics."
+      "notEnabledHint": "Enable 'Evolution Metrics' in the Evolution section of the Agent tab to start recording metrics.",
+      "colType": "Type",
+      "colSuggestion": "Suggestion",
+      "colStatus": "Status",
+      "colCreated": "Created",
+      "colActions": "Actions",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "confirming": "...",
+      "successRate": "Success Rate",
+      "usageRate": "Usage Rate",
+      "tooltipCalls": "{{count}} calls, {{ms}}ms avg",
+      "tooltipQueries": "{{count}} queries, score {{score}}"
     }
   },
   "general": {

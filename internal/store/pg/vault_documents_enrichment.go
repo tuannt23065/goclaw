@@ -44,9 +44,10 @@ func (s *PGVaultStore) UpdateSummaryAndReembed(ctx context.Context, tenantID, do
 
 // FindSimilarDocs finds documents with similar embeddings to the given docID.
 // Returns top-N neighbors excluding the source doc itself.
+// Empty agentID means no agent filter.
 func (s *PGVaultStore) FindSimilarDocs(ctx context.Context, tenantID, agentID, docID string, limit int) ([]store.VaultSearchResult, error) {
 	tid := mustParseUUID(tenantID)
-	aid := mustParseUUID(agentID)
+	aid := optAgentUUID(&agentID)
 	did := mustParseUUID(docID)
 
 	// Fetch source embedding.
@@ -63,12 +64,20 @@ func (s *PGVaultStore) FindSimilarDocs(ctx context.Context, tenantID, agentID, d
 			content_hash, summary, metadata, created_at, updated_at,
 			1 - (embedding <=> $1::vector) AS score
 		FROM vault_documents
-		WHERE tenant_id = $2 AND agent_id = $3 AND id != $4 AND embedding IS NOT NULL
-		ORDER BY embedding <=> $1::vector
-		LIMIT $5`
+		WHERE tenant_id = $2 AND id != $3 AND embedding IS NOT NULL`
+	args := []any{*embStr, tid, did}
+	p := 4
+
+	if aid != nil {
+		q += fmt.Sprintf(" AND agent_id = $%d", p)
+		args = append(args, *aid)
+		p++
+	}
+	q += fmt.Sprintf(" ORDER BY embedding <=> $1::vector LIMIT $%d", p)
+	args = append(args, limit)
 
 	var scanned []vaultSearchRow
-	if err := pkgSqlxDB.SelectContext(ctx, &scanned, q, *embStr, tid, aid, did, limit); err != nil {
+	if err := pkgSqlxDB.SelectContext(ctx, &scanned, q, args...); err != nil {
 		return nil, fmt.Errorf("vault.find_similar: %w", err)
 	}
 	return vaultSearchRowsToResults(scanned, "vault"), nil

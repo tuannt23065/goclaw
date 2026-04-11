@@ -144,7 +144,7 @@ export function AgentPermissionsTab({ agentId }: AgentPermissionsTabProps) {
   const currentDescKey = CONFIG_TYPES.find((c) => c.value === configType)?.descKey ?? "";
 
   return (
-    <div className="space-y-4">
+    <section className="space-y-4 rounded-lg border p-3 sm:p-4">
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -305,6 +305,6 @@ export function AgentPermissionsTab({ agentId }: AgentPermissionsTabProps) {
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 }

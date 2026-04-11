@@ -367,3 +367,12 @@
 .dark .hljs-template-variable { color: #ffa657; }
 .dark .hljs-deletion { color: #ffa198; background: rgba(255,129,130,0.15); }
 .dark .hljs-addition { background: rgba(63,185,80,0.15); }
+
+/* Hide scrollbar but keep scrolling */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

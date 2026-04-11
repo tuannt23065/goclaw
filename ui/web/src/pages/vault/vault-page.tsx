@@ -1,12 +1,13 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, FileArchive, Plus, PanelLeftOpen, FolderSync } from "lucide-react";
+import { Search, FileArchive, Plus, PanelLeftOpen, FolderSync, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAgents } from "@/pages/agents/hooks/use-agents";
 import { useTeams } from "@/pages/teams/hooks/use-teams";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useVaultDocuments, useVaultGraphData, useRescanWorkspace } from "./hooks/use-vault";
+import { useEnrichmentProgress } from "./hooks/use-enrichment-progress";
 import { VaultDocumentSidebar } from "./vault-document-sidebar";
 import { VaultSearchDialog } from "./vault-search-dialog";
 import { VaultCreateDialog } from "./vault-create-dialog";
@@ -31,6 +32,7 @@ export function VaultPage() {
 
   const [selectedAgent, setSelectedAgent] = useState("");
   const [selectedTeam, setSelectedTeam] = useState("");
+  const [docType, setDocType] = useState("");
   const [detailDoc, setDetailDoc] = useState<VaultDocument | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -38,10 +40,13 @@ export function VaultPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [page, setPage] = useState(0);
 
-  const { rescan, isPending: rescanPending } = useRescanWorkspace(selectedAgent);
+  const { rescan, isPending: rescanPending } = useRescanWorkspace();
+  const enrichment = useEnrichmentProgress();
+  const enriching = enrichment?.running ?? false;
 
   const { documents, total, loading } = useVaultDocuments(selectedAgent, {
     teamId: selectedTeam || undefined,
+    docType: docType || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -60,6 +65,7 @@ export function VaultPage() {
 
   const handleAgentChange = (v: string) => { setSelectedAgent(v); setPage(0); };
   const handleTeamChange = (v: string) => { setSelectedTeam(v); setPage(0); };
+  const handleDocTypeChange = (v: string) => { setDocType(v); setPage(0); };
 
   // Sidebar click → open detail modal + highlight graph node
   const handleSidebarSelect = (doc: VaultDocument) => {
@@ -69,15 +75,15 @@ export function VaultPage() {
   };
 
   // Graph single-click → highlight only
-  const handleNodeSelect = (docId: string | null) => {
+  const handleNodeSelect = useCallback((docId: string | null) => {
     setSelectedDocId(docId);
-  };
+  }, []);
 
   // Graph double-click → open detail modal + highlight
-  const handleNodeDoubleClick = (doc: VaultDocument) => {
+  const handleNodeDoubleClick = useCallback((doc: VaultDocument) => {
     setDetailDoc(doc);
     setSelectedDocId(doc.id);
-  };
+  }, []);
 
   const handleCloseDetail = () => { setDetailDoc(null); };
 
@@ -104,6 +110,10 @@ export function VaultPage() {
           totalPages={totalPages}
           total={total}
           onPageChange={setPage}
+          docType={docType}
+          onDocTypeChange={handleDocTypeChange}
+          agentId={selectedAgent}
+          teamId={selectedTeam}
         />
       </div>
 
@@ -136,28 +146,42 @@ export function VaultPage() {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span>
-                  <Button size="sm" variant="outline" onClick={() => rescan()} disabled={!selectedAgent || rescanPending}>
-                    <FolderSync className={`h-3.5 w-3.5${rescanPending ? " animate-spin" : ""}`} />
-                  </Button>
-                </span>
+                <Button size="sm" variant="outline" onClick={() => rescan()} disabled={rescanPending || enriching}>
+                  {(rescanPending || enriching) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderSync className="h-3.5 w-3.5" />}
+                </Button>
               </TooltipTrigger>
-              <TooltipContent>{!selectedAgent ? t("selectAgentFirst", "Select an agent first") : t("rescanTooltip", "Rescan workspace")}</TooltipContent>
+              <TooltipContent>{enriching ? t("enriching", "Enriching documents...") : t("rescanTooltip", "Rescan workspace")}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
                 <span>
-                  <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!selectedAgent}>
+                  <Button size="sm" onClick={() => setCreateOpen(true)}>
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </span>
               </TooltipTrigger>
-              {!selectedAgent && <TooltipContent>{t("selectAgentFirst", "Select an agent first")}</TooltipContent>}
             </Tooltip>
           </TooltipProvider>
         </div>
+
+        {/* Enrichment progress bar */}
+        {enrichment && enrichment.total > 0 && (
+          <div className="px-3 py-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full bg-primary rounded-full transition-all duration-300"
+                style={{ width: `${Math.round((enrichment.done / enrichment.total) * 100)}%` }}
+              />
+            </div>
+            <span className="shrink-0">
+              {enrichment.running
+                ? `${t("enriching", "Enriching")} ${enrichment.done}/${enrichment.total}`
+                : t("enrichComplete", "Enrichment complete")}
+            </span>
+          </div>
+        )}
 
         {/* Graph — takes full remaining height */}
         <div className="flex-1 min-h-0 relative">
@@ -180,7 +204,7 @@ export function VaultPage() {
           onSelectResult={(doc) => { setDetailDoc(doc); setSelectedDocId(doc.id); }}
         />
       )}
-      {selectedAgent && <VaultCreateDialog agentId={selectedAgent} open={createOpen} onOpenChange={setCreateOpen} />}
+      <VaultCreateDialog open={createOpen} onOpenChange={setCreateOpen} defaultAgentId={selectedAgent} defaultTeamId={selectedTeam} />
 
       {/* Detail dialog for all document views */}
       <Suspense fallback={null}>

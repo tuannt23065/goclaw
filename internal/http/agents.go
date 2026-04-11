@@ -18,6 +18,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
@@ -32,8 +33,9 @@ type AgentsHandler struct {
 	kgStore          store.KnowledgeGraphStore // for import (nil = disabled)
 	episodicStore    store.EpisodicStore       // for import (nil in SQLite/lite builds)
 	vaultStore       store.VaultStore          // for vault import (nil = disabled)
-	toolsReg         ToolLister                // for system prompt preview tool resolution (nil = fallback)
-	skillsLoader     SkillPinnedBuilder        // for system prompt preview pinned skills (nil = skip)
+	toolsReg         ToolPreviewLister          // for system prompt preview tool resolution (nil = fallback)
+	skillsLoader     SkillPreviewBuilder        // for system prompt preview pinned skills (nil = skip)
+	skillAccessStore store.SkillAccessStore     // for system prompt preview skill filtering (nil = skip)
 	teamStore        store.TeamStore           // for system prompt preview team context (nil = skip)
 	agentLinkStore   store.AgentLinkStore      // for system prompt preview delegation targets (nil = skip)
 	defaultWorkspace string                   // default workspace path template (e.g. "~/.goclaw/workspace")
@@ -82,24 +84,30 @@ func (h *AgentsHandler) SetVaultStore(vs store.VaultStore) {
 	h.vaultStore = vs
 }
 
-// ToolLister is satisfied by tools.Registry for system prompt preview.
-type ToolLister interface{ List() []string }
+// ToolPreviewLister is satisfied by tools.Registry for system prompt preview.
+type ToolPreviewLister interface {
+	List() []string
+	Get(name string) (tools.Tool, bool)
+	Aliases() map[string]string
+}
 
-// SkillPinnedBuilder is satisfied by skills.Loader for pinned skills summary.
-type SkillPinnedBuilder interface {
+// SkillPreviewBuilder is satisfied by skills.Loader for system prompt preview.
+type SkillPreviewBuilder interface {
 	BuildPinnedSummary(ctx context.Context, names []string) string
+	BuildSummary(ctx context.Context, allowList []string) string
 }
 
 // SetPreviewDeps attaches optional dependencies for system prompt preview.
-func (h *AgentsHandler) SetPreviewDeps(tl ToolLister, sl SkillPinnedBuilder) {
+func (h *AgentsHandler) SetPreviewDeps(tl ToolPreviewLister, sl SkillPreviewBuilder) {
 	h.toolsReg = tl
 	h.skillsLoader = sl
 }
 
 // SetPreviewStores attaches team + agent link stores for system prompt preview.
-func (h *AgentsHandler) SetPreviewStores(ts store.TeamStore, als store.AgentLinkStore) {
+func (h *AgentsHandler) SetPreviewStores(ts store.TeamStore, als store.AgentLinkStore, sas store.SkillAccessStore) {
 	h.teamStore = ts
 	h.agentLinkStore = als
+	h.skillAccessStore = sas
 }
 
 // isOwnerUser checks if the given user ID is a system owner.

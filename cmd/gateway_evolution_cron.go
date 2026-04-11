@@ -14,7 +14,10 @@ import (
 // Only one gateway instance should run evolution analysis at a time.
 const evolutionCronLockID int64 = 0x65766F6C // "evol"
 
-// runEvolutionCron runs the v3 evolution suggestion engine (daily at 3:00 AM)
+// evolutionRunHours defines when analysis runs each day (server local time).
+var evolutionRunHours = []int{3, 9, 15, 21}
+
+// runEvolutionCron runs the v3 evolution suggestion engine (every 6 hours at 3:00/9:00/15:00/21:00)
 // and evaluation/rollback check (weekly on Sundays at 3:00 AM) as a background goroutine.
 // Designed to be called with `go runEvolutionCron(...)`.
 func runEvolutionCron(stores *store.Stores, engine *agent.SuggestionEngine) {
@@ -23,30 +26,37 @@ func runEvolutionCron(stores *store.Stores, engine *agent.SuggestionEngine) {
 	runSuggestionAnalysis(stores, engine)
 
 	for {
-		nextDaily := nextDailyRun(3) // 3:00 AM server time
+		next := nextScheduledRun(evolutionRunHours)
 
-		timer := time.NewTimer(time.Until(nextDaily))
+		timer := time.NewTimer(time.Until(next))
 		<-timer.C
 		timer.Stop()
 
 		runSuggestionAnalysis(stores, engine)
 
-		// Weekly evaluation on Sundays.
-		if time.Now().Weekday() == time.Sunday {
+		// Weekly evaluation: Sunday at 3:00 AM only.
+		now := time.Now()
+		if now.Weekday() == time.Sunday && now.Hour() < 4 {
 			runEvolutionEvaluation(stores)
 		}
 	}
 }
 
-// nextDailyRun returns the next occurrence of the given hour (0-23) today or tomorrow.
+// nextScheduledRun returns the earliest future time matching one of the given hours.
 // Uses AddDate to handle DST transitions correctly (calendar day, not 24h).
-func nextDailyRun(hour int) time.Time {
+func nextScheduledRun(hours []int) time.Time {
 	now := time.Now()
-	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
-	if !now.Before(next) {
-		next = next.AddDate(0, 0, 1) // calendar day, not 24h — DST-safe
+	var best time.Time
+	for _, h := range hours {
+		t := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location())
+		if !now.Before(t) {
+			t = t.AddDate(0, 0, 1) // already passed today, try tomorrow
+		}
+		if best.IsZero() || t.Before(best) {
+			best = t
+		}
 	}
-	return next
+	return best
 }
 
 // tryAdvisoryLock acquires a PG session-level advisory lock on a pinned connection.

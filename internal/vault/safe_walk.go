@@ -158,16 +158,23 @@ func SafeWalkWorkspace(ctx context.Context, root string, opts WalkOptions) ([]Wa
 }
 
 // isExcludedDir returns true if an entire directory subtree should be skipped.
+// relPath is the walk-relative path of the directory (e.g. "agents/my-bot/web-fetch").
 func isExcludedDir(relPath string) bool {
-	first, _, _ := strings.Cut(relPath, "/")
+	// Get the directory's own name (last segment).
+	dirName := filepath.Base(relPath)
 
-	// Skip memory/ subtree entirely.
-	if first == "memory" {
+	// Skip memory/ at any depth.
+	if dirName == "memory" {
 		return true
 	}
 
 	// Skip hidden dirs (. prefix) EXCEPT .uploads (user content).
-	if strings.HasPrefix(first, ".") && first != ".uploads" {
+	if strings.HasPrefix(dirName, ".") && dirName != ".uploads" {
+		return true
+	}
+
+	// Skip web-fetch/ at any depth — content from external URLs may be dangerous.
+	if dirName == "web-fetch" {
 		return true
 	}
 
@@ -189,19 +196,19 @@ var contextFiles = map[string]bool{
 }
 
 // isExcludedPath returns true if a file should be excluded from vault registration.
-// Defense-in-depth: also checks parent directory exclusions for callers that bypass dir walk.
+// Defense-in-depth: checks ALL parent directory segments for exclusions.
 func isExcludedPath(relPath string) bool {
-	// Check first path segment for excluded directories.
-	first, _, _ := strings.Cut(relPath, "/")
-
-	// memory/ prefix.
-	if first == "memory" {
-		return true
-	}
-
-	// Hidden dirs (. prefix) except .uploads.
-	if strings.HasPrefix(first, ".") && first != ".uploads" {
-		return true
+	// Check every directory segment in the path.
+	dir := filepath.Dir(relPath)
+	for dir != "." && dir != "/" {
+		seg := filepath.Base(dir)
+		if seg == "memory" || seg == "web-fetch" {
+			return true
+		}
+		if strings.HasPrefix(seg, ".") && seg != ".uploads" {
+			return true
+		}
+		dir = filepath.Dir(dir)
 	}
 
 	base := filepath.Base(relPath)

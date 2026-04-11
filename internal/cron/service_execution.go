@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/adhocore/gronx"
@@ -146,9 +145,20 @@ func (cs *Service) runLoop(stopChan chan struct{}) {
 		case <-stopChan:
 			return
 		case <-ticker.C:
-			cs.checkJobs()
+			cs.safeCheckJobs()
 		}
 	}
+}
+
+// safeCheckJobs wraps checkJobs with panic recovery so a panic in any
+// check/claim logic doesn't kill the runLoop goroutine.
+func (cs *Service) safeCheckJobs() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("cron: checkJobs panicked — runLoop continues", "panic", fmt.Sprint(r))
+		}
+	}()
+	cs.checkJobs()
 }
 
 func (cs *Service) checkJobs() {
@@ -189,17 +199,16 @@ func (cs *Service) checkJobs() {
 	cs.saveUnsafe()
 	cs.mu.Unlock()
 
-	// Execute jobs in parallel — scheduler enforces per-session serialization
-	var wg sync.WaitGroup
+	// Execute jobs in parallel without blocking the runLoop.
+	// Previously wg.Wait() blocked here — if any job hung (e.g. LLM timeout,
+	// agent loop stuck), the entire cron scheduler would stop checking for new
+	// due jobs. Now each job runs independently with panic recovery.
 	for _, dj := range dueJobs {
-		wg.Add(1)
 		go func(id string, scheduledAtMS int64) {
-			defer wg.Done()
 			defer safego.Recover(nil, "job_id", id)
 			cs.executeJobByID(id, scheduledAtMS)
 		}(dj.id, dj.scheduledAtMS)
 	}
-	wg.Wait()
 }
 
 func (cs *Service) executeJobByID(jobID string, scheduledAtMS int64) {

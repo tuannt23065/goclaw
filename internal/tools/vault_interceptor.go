@@ -25,14 +25,15 @@ func NewVaultInterceptor(vs store.VaultStore, workspace string, bus eventbus.Dom
 	return &VaultInterceptor{vaultStore: vs, workspace: workspace, eventBus: bus}
 }
 
-// inferScopeFromContext returns scope and team_id based on RunContext.
-// TeamID present → scope="team", teamID=&rc.TeamID. Absent → "personal", nil.
-func inferScopeFromContext(ctx context.Context) (scope string, teamID *string) {
+// inferScopeFromContext returns scope, team_id, and whether agent_id should be set.
+// TeamID present → scope="team", teamID=&rc.TeamID, agentOwned=false.
+// Absent → "personal", nil, agentOwned=true.
+func inferScopeFromContext(ctx context.Context) (scope string, teamID *string, agentOwned bool) {
 	rc := store.RunContextFromCtx(ctx)
 	if rc != nil && rc.TeamID != "" {
-		return "team", &rc.TeamID
+		return "team", &rc.TeamID, false
 	}
-	return "personal", nil
+	return "personal", nil, true
 }
 
 // AfterWrite registers or updates a vault document after a file write.
@@ -58,11 +59,19 @@ func (v *VaultInterceptor) AfterWrite(ctx context.Context, resolvedPath, content
 	hash := vault.ContentHash([]byte(content))
 	title := vault.InferTitle(relPath)
 	docType := vault.InferDocType(relPath)
-	scope, teamID := inferScopeFromContext(ctx)
+	scope, teamID, agentOwned := inferScopeFromContext(ctx)
+
+	// Team-scoped files belong to the team, not the creating agent.
+	var agentIDPtr *string
+	eventAgentID := ""
+	if agentOwned {
+		agentIDPtr = &agentID
+		eventAgentID = agentID
+	}
 
 	doc := &store.VaultDocument{
 		TenantID:    tenantID,
-		AgentID:     agentID,
+		AgentID:     agentIDPtr,
 		TeamID:      teamID,
 		Scope:       scope,
 		Path:        relPath,
@@ -80,14 +89,14 @@ func (v *VaultInterceptor) AfterWrite(ctx context.Context, resolvedPath, content
 		v.eventBus.Publish(eventbus.DomainEvent{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			Type:      eventbus.EventVaultDocUpserted,
-			SourceID:  doc.ID + ":" + hash, // unique per content version, avoids bus-level dedup suppression
+			SourceID:  doc.ID + ":" + hash,
 			TenantID:  tenantID,
-			AgentID:   agentID,
+			AgentID:   eventAgentID,
 			Timestamp: time.Now(),
 			Payload: eventbus.VaultDocUpsertedPayload{
 				DocID:       doc.ID,
 				TenantID:    tenantID,
-				AgentID:     agentID,
+				AgentID:     eventAgentID,
 				Path:        relPath,
 				ContentHash: hash,
 				Workspace:   v.workspace,
@@ -124,11 +133,18 @@ func (v *VaultInterceptor) AfterWriteMedia(ctx context.Context, resolvedPath, su
 	}
 
 	title := vault.InferTitle(relPath)
-	scope, teamID := inferScopeFromContext(ctx)
+	scope, teamID, agentOwned := inferScopeFromContext(ctx)
+
+	var agentIDPtr *string
+	eventAgentID := ""
+	if agentOwned {
+		agentIDPtr = &agentID
+		eventAgentID = agentID
+	}
 
 	doc := &store.VaultDocument{
 		TenantID:    tenantID,
-		AgentID:     agentID,
+		AgentID:     agentIDPtr,
 		TeamID:      teamID,
 		Scope:       scope,
 		Path:        relPath,
@@ -150,12 +166,12 @@ func (v *VaultInterceptor) AfterWriteMedia(ctx context.Context, resolvedPath, su
 			Type:      eventbus.EventVaultDocUpserted,
 			SourceID:  doc.ID + ":" + hash,
 			TenantID:  tenantID,
-			AgentID:   agentID,
+			AgentID:   eventAgentID,
 			Timestamp: time.Now(),
 			Payload: eventbus.VaultDocUpsertedPayload{
 				DocID:       doc.ID,
 				TenantID:    tenantID,
-				AgentID:     agentID,
+				AgentID:     eventAgentID,
 				Path:        relPath,
 				ContentHash: hash,
 				Workspace:   v.workspace,
@@ -183,7 +199,11 @@ func (v *VaultInterceptor) BeforeRead(ctx context.Context, resolvedPath string) 
 		return
 	}
 
+	// Try agent-scoped first, then tenant-wide (team/shared docs have no agent_id).
 	doc, err := v.vaultStore.GetDocument(ctx, tenantID, agentID, relPath)
+	if err != nil {
+		doc, err = v.vaultStore.GetDocument(ctx, tenantID, "", relPath)
+	}
 	if err != nil {
 		return // not registered yet — skip
 	}

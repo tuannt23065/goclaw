@@ -2,34 +2,112 @@ package vault
 
 import "testing"
 
-func TestInferScopeFromPath(t *testing.T) {
-	tests := []struct {
-		path    string
-		scope   string
-		hasTeam bool
-		teamID  string
-	}{
-		{"notes/doc.md", "personal", false, ""},
-		{"web-fetch/page.txt", "personal", false, ""},
-		{"report.md", "personal", false, ""},
-		{"teams/abc-def-123/report.md", "team", true, "abc-def-123"},
-		{"teams/abc-def-123/deep/nested.md", "team", true, "abc-def-123"},
-		{"teams/", "personal", false, ""},           // malformed, no team ID
-		{"teams", "personal", false, ""},             // no slash
-		{"teamsfoo/bar.md", "personal", false, ""},   // not teams/ prefix
-		{"telegram/123/teams/x/y.md", "personal", false, ""}, // teams not at root
+// TestInferOwnerFromPath covers the new tenant-wide path parser.
+func TestInferOwnerFromPath(t *testing.T) {
+	agentMap := map[string]string{
+		"my-bot":    "uuid-1",
+		"other-bot": "uuid-2",
 	}
+	validUUID := "550e8400-e29b-41d4-a716-446655440000"
+	teamSet := map[string]bool{
+		validUUID: true,
+	}
+
+	tests := []struct {
+		path            string
+		wantAgentID     *string
+		wantTeamID      *string
+		wantScope       string
+		wantStrippedPath string
+	}{
+		// agents/{key}/... → personal scope, strip prefix
+		{
+			path:            "agents/my-bot/notes/todo.md",
+			wantAgentID:     strPtr("uuid-1"),
+			wantScope:       "personal",
+			wantStrippedPath: "notes/todo.md",
+		},
+		// agents/{key} with no trailing path → personal, empty stripped path
+		{
+			path:            "agents/my-bot/file.md",
+			wantAgentID:     strPtr("uuid-1"),
+			wantScope:       "personal",
+			wantStrippedPath: "file.md",
+		},
+		// teams/{uuid}/... → team scope, strip prefix
+		{
+			path:            "teams/" + validUUID + "/doc.md",
+			wantTeamID:      strPtr(validUUID),
+			wantScope:       "team",
+			wantStrippedPath: "doc.md",
+		},
+		// teams/{uuid}/deep/nested → team scope
+		{
+			path:            "teams/" + validUUID + "/deep/nested.md",
+			wantTeamID:      strPtr(validUUID),
+			wantScope:       "team",
+			wantStrippedPath: "deep/nested.md",
+		},
+		// root-level file → shared scope, path unchanged
+		{
+			path:            "README.md",
+			wantScope:       "shared",
+			wantStrippedPath: "README.md",
+		},
+		// nested file not under agents/ or teams/ → shared
+		{
+			path:            "docs/guide.md",
+			wantScope:       "shared",
+			wantStrippedPath: "docs/guide.md",
+		},
+		// unknown agent → skip (scope="")
+		{
+			path:      "agents/unknown-bot/file.md",
+			wantScope: "",
+		},
+		// invalid team UUID → skip
+		{
+			path:      "teams/not-a-uuid/file.md",
+			wantScope: "",
+		},
+		// valid UUID but not in teamSet → skip
+		{
+			path:      "teams/11111111-2222-3333-4444-555555555555/file.md",
+			wantScope: "",
+		},
+		// malformed agents path (no trailing file) is still an unknown agent key check
+		{
+			path:      "agents/unknown/",
+			wantScope: "",
+		},
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			scope, teamID := inferScopeFromPath(tt.path)
-			if scope != tt.scope {
-				t.Errorf("scope = %q, want %q", scope, tt.scope)
+			gotAgentID, gotTeamID, gotScope, gotPath := inferOwnerFromPath(tt.path, agentMap, teamSet)
+
+			if gotScope != tt.wantScope {
+				t.Errorf("scope = %q, want %q", gotScope, tt.wantScope)
 			}
-			if tt.hasTeam && (teamID == nil || *teamID != tt.teamID) {
-				t.Errorf("teamID = %v, want %q", teamID, tt.teamID)
+			if tt.wantScope == "" {
+				return // skip is signaled; remaining fields don't matter
 			}
-			if !tt.hasTeam && teamID != nil {
-				t.Errorf("teamID = %v, want nil", teamID)
+			if tt.wantStrippedPath != "" && gotPath != tt.wantStrippedPath {
+				t.Errorf("strippedPath = %q, want %q", gotPath, tt.wantStrippedPath)
+			}
+			if tt.wantAgentID != nil {
+				if gotAgentID == nil || *gotAgentID != *tt.wantAgentID {
+					t.Errorf("agentID = %v, want %q", gotAgentID, *tt.wantAgentID)
+				}
+			} else if gotAgentID != nil {
+				t.Errorf("agentID = %v, want nil", gotAgentID)
+			}
+			if tt.wantTeamID != nil {
+				if gotTeamID == nil || *gotTeamID != *tt.wantTeamID {
+					t.Errorf("teamID = %v, want %q", gotTeamID, *tt.wantTeamID)
+				}
+			} else if gotTeamID != nil {
+				t.Errorf("teamID = %v, want nil", gotTeamID)
 			}
 		})
 	}
@@ -78,3 +156,5 @@ func TestInferTitle(t *testing.T) {
 		})
 	}
 }
+
+func strPtr(s string) *string { return &s }

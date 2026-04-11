@@ -73,9 +73,9 @@ func TestSafeWalkWorkspace_ExcludedPaths(t *testing.T) {
 	writeFile(t, dir, "data.db", "x")
 	writeFile(t, dir, "data.db-wal", "x")
 	writeFile(t, dir, "data.db-shm", "x")
+	writeFile(t, dir, "web-fetch/page.txt", "x") // excluded: external content
 	// Should NOT be excluded
 	writeFile(t, dir, "notes/meeting.md", "x")
-	writeFile(t, dir, "web-fetch/page.txt", "x")
 	writeFile(t, dir, ".uploads/photo.jpg", "x")
 	writeFile(t, dir, "soul-notes.md", "x")
 	writeFile(t, dir, "deep/SOUL.md", "x") // not root level
@@ -85,7 +85,7 @@ func TestSafeWalkWorkspace_ExcludedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 6 {
+	if len(entries) != 5 {
 		names := make([]string, len(entries))
 		for i, e := range entries {
 			names[i] = e.RelPath
@@ -201,7 +201,8 @@ func TestIsExcludedPath(t *testing.T) {
 		{"data.db-shm", true},
 		// NOT excluded:
 		{"notes/meeting.md", false},
-		{"web-fetch/page.txt", false},
+		{"web-fetch/page.txt", true},
+		{"agents/my-bot/web-fetch/data.txt", true},
 		{"images/screenshot.png", false},
 		{"teams/abc-123/doc.md", false},
 		{"soul-notes.md", false},

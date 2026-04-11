@@ -1,142 +1,236 @@
-import { useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
+import { useState, useEffect, useCallback, useRef, type ChangeEvent, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { Upload, X, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { useCreateDocument } from "./hooks/use-vault";
-import { vaultCreateSchema, type VaultCreateFormData } from "@/schemas/vault.schema";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { useAgents } from "@/pages/agents/hooks/use-agents";
+import { useTeams } from "@/pages/teams/hooks/use-teams";
+import { useVaultUpload } from "./hooks/use-vault-upload";
 
-const DOC_TYPES = ["context", "memory", "note", "skill"] as const;
-const SCOPES = ["personal", "team", "shared"] as const;
+const ACCEPTED_EXTS = new Set([
+  ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".toml", ".xml", ".html", ".htm",
+  ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".java", ".rb", ".sh", ".sql",
+  ".swift", ".kt", ".c", ".cpp", ".h",
+]);
+const ACCEPT_ATTR = Array.from(ACCEPTED_EXTS).join(",");
 
-interface Props {
-  agentId: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onCreated?: () => void;
+function isAllowedExt(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return ACCEPTED_EXTS.has(name.slice(dot).toLowerCase());
 }
 
-export function VaultCreateDialog({ agentId, open, onOpenChange, onCreated }: Props) {
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+type Destination = "shared" | "agent" | "team";
+
+interface Props {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onUploaded?: () => void;
+  defaultAgentId?: string;
+  defaultTeamId?: string;
+}
+
+export function VaultCreateDialog({ open, onOpenChange, onUploaded, defaultAgentId, defaultTeamId }: Props) {
   const { t } = useTranslation("vault");
-  const { create } = useCreateDocument(agentId);
-  const [saving, setSaving] = useState(false);
+  const { agents } = useAgents();
+  const { teams, load: loadTeams } = useTeams();
+  const { upload, isPending } = useVaultUpload();
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    reset,
-    formState: { errors },
-  } = useForm<VaultCreateFormData>({
-    resolver: zodResolver(vaultCreateSchema),
-    defaultValues: {
-      title: "",
-      path: "",
-      docType: "note",
-      scope: "personal",
-    },
-  });
+  const [destination, setDestination] = useState<Destination>("shared");
+  const [agentId, setAgentId] = useState("");
+  const [teamId, setTeamId] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
 
-  const docType = watch("docType");
-  const scope = watch("scope");
+  useEffect(() => { if (open) loadTeams(); }, [open, loadTeams]);
 
-  const onValid = async (data: VaultCreateFormData) => {
-    setSaving(true);
+  useEffect(() => {
+    if (!open) return;
+    setFiles([]);
+    setDragging(false);
+    if (defaultAgentId) {
+      setDestination("agent");
+      setAgentId(defaultAgentId);
+    } else if (defaultTeamId) {
+      setDestination("team");
+      setTeamId(defaultTeamId);
+    } else {
+      setDestination("shared");
+    }
+  }, [open, defaultAgentId, defaultTeamId]);
+
+  const addFiles = useCallback((incoming: File[]) => {
+    const valid = incoming.filter((f) => isAllowedExt(f.name));
+    setFiles((prev) => {
+      const names = new Set(prev.map((f) => f.name));
+      return [...prev, ...valid.filter((f) => !names.has(f.name))];
+    });
+  }, []);
+
+  const onDrop = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    addFiles(Array.from(e.dataTransfer.files));
+  }, [addFiles]);
+
+  const onFileInput = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    addFiles(Array.from(e.target.files ?? []));
+    e.target.value = "";
+  }, [addFiles]);
+
+  const removeFile = (idx: number) => setFiles((prev) => prev.filter((_, i) => i !== idx));
+
+  const handleUpload = async () => {
+    const opts = destination === "agent" ? { agentId }
+      : destination === "team" ? { teamId }
+        : {};
     try {
-      await create({ title: data.title.trim(), path: data.path.trim(), doc_type: data.docType, scope: data.scope });
-      reset();
-      onCreated?.();
+      await upload(files, opts);
       onOpenChange(false);
+      onUploaded?.();
     } catch {
       // error toasted in hook
-    } finally {
-      setSaving(false);
     }
   };
 
-  const handleClose = (v: boolean) => {
-    if (!saving) { reset(); onOpenChange(v); }
-  };
+  const canUpload = files.length > 0
+    && !isPending
+    && (destination !== "agent" || agentId)
+    && (destination !== "team" || teamId);
+
+  const handleClose = (v: boolean) => { if (!isPending) onOpenChange(v); };
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-md max-sm:inset-0">
+      <DialogContent className="sm:max-w-lg max-sm:inset-0">
         <DialogHeader>
-          <DialogTitle>{t("createDoc")}</DialogTitle>
+          <DialogTitle>{t("upload.title", "Upload to Vault")}</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onValid)} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="vault-title">{t("fields.title")} *</Label>
-            <Input
-              id="vault-title"
-              {...register("title")}
-              placeholder={t("fields.titlePlaceholder")}
-              className="text-base md:text-sm"
-            />
-            {errors.title && (
-              <p className="text-xs text-destructive">{errors.title.message}</p>
-            )}
+        <div className="space-y-4 max-h-[calc(85vh-8rem)] overflow-y-auto overscroll-contain -mx-1 px-1">
+          {/* Destination */}
+          <fieldset className="space-y-3">
+            <Label>{t("upload.destination", "Destination")}</Label>
+            <RadioGroup
+              value={destination}
+              onValueChange={(v) => setDestination(v as Destination)}
+              className="gap-3"
+            >
+              <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+                <RadioGroupItem value="shared" />
+                {t("upload.shared", "Shared")}
+              </label>
+
+              <div className="space-y-2">
+                <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+                  <RadioGroupItem value="agent" />
+                  {t("upload.agent", "Agent")}
+                </label>
+                {destination === "agent" && (
+                  <div className="pl-6">
+                    <Select value={agentId} onValueChange={setAgentId}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={t("upload.selectAgent", "Select agent...")} />
+                      </SelectTrigger>
+                      <SelectContent className="pointer-events-auto">
+                        {(agents ?? []).map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.display_name || a.agent_key}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+                  <RadioGroupItem value="team" />
+                  {t("upload.team", "Team")}
+                </label>
+                {destination === "team" && (
+                  <div className="pl-6">
+                    <Select value={teamId} onValueChange={setTeamId}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={t("upload.selectTeam", "Select team...")} />
+                      </SelectTrigger>
+                      <SelectContent className="pointer-events-auto">
+                        {(teams ?? []).map((team) => (
+                          <SelectItem key={team.id} value={team.id}>
+                            {team.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            </RadioGroup>
+          </fieldset>
+
+          {/* Drop zone */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            onClick={() => inputRef.current?.click()}
+            className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-8 cursor-pointer transition-colors ${
+              dragging ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-primary/50"
+            }`}
+          >
+            <Upload className="h-8 w-8 text-muted-foreground/50" />
+            <p className="text-sm text-muted-foreground">{t("upload.dropzone", "Drop files here or click to browse")}</p>
+            <p className="text-xs text-muted-foreground/60">{t("upload.dropzoneHint", "Text files only (.md, .txt, .json, .yaml, .csv, ...)")}</p>
+            <input ref={inputRef} type="file" multiple accept={ACCEPT_ATTR}
+              onChange={onFileInput} className="hidden" />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="vault-path">{t("fields.path")} *</Label>
-            <Input
-              id="vault-path"
-              {...register("path")}
-              placeholder={t("fields.pathPlaceholder")}
-              className="text-base md:text-sm font-mono"
-            />
-            {errors.path && (
-              <p className="text-xs text-destructive">{errors.path.message}</p>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* File list */}
+          {files.length > 0 && (
             <div className="space-y-1.5">
-              <Label htmlFor="vault-doctype">{t("fields.docType")}</Label>
-              <select
-                id="vault-doctype"
-                value={docType}
-                onChange={(e) => setValue("docType", e.target.value, { shouldValidate: true })}
-                className="w-full text-base md:text-sm border rounded px-2 py-1.5 bg-background"
-              >
-                {DOC_TYPES.map((dt) => (
-                  <option key={dt} value={dt}>{t(`type.${dt}`)}</option>
+              <Label className="text-xs text-muted-foreground">
+                {t("upload.files", { count: files.length, defaultValue: `Files (${files.length})` })}
+              </Label>
+              <div className="max-h-48 overflow-y-auto overscroll-contain space-y-0.5 rounded-md border p-2">
+                {files.map((f, i) => (
+                  <div key={f.name} className="flex items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-muted/50">
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate flex-1 font-mono text-xs">{f.name}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatBytes(f.size)}</span>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); removeFile(i); }}
+                      className="shrink-0 p-1 rounded-sm hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 ))}
-              </select>
+              </div>
             </div>
+          )}
+        </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="vault-scope">{t("fields.scope")}</Label>
-              <select
-                id="vault-scope"
-                value={scope}
-                onChange={(e) => setValue("scope", e.target.value, { shouldValidate: true })}
-                className="w-full text-base md:text-sm border rounded px-2 py-1.5 bg-background"
-              >
-                {SCOPES.map((s) => (
-                  <option key={s} value={s}>{t(`scope.${s}`)}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => { reset(); onOpenChange(false); }} disabled={saving}>
-              {t("cancel")}
-            </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? t("saving") : t("create")}
-            </Button>
-          </DialogFooter>
-        </form>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
+            {t("cancel")}
+          </Button>
+          <Button onClick={handleUpload} disabled={!canUpload}>
+            {isPending ? t("upload.uploading", "Uploading...") : t("upload.upload", "Upload")}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

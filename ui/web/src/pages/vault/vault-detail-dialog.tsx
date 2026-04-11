@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil, Plus, FileText, Link2 } from "lucide-react";
+import { Pencil, Plus, FileText, Link2, FileQuestion } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
-import { useVaultLinks, useVaultFileContent, useUpdateDocument, useDeleteDocument } from "./hooks/use-vault";
+import { useVaultLinks, useVaultFileContent, useVaultImageUrl, useUpdateDocument, useDeleteDocument } from "./hooks/use-vault";
 import { VaultLinkDialog } from "./vault-link-dialog";
 import {
   VaultEditControls, DocTypeSelect, ScopeSelect, LinkBadge,
@@ -24,7 +24,7 @@ interface Props {
 
 export function VaultDetailDialog({ doc, open, onOpenChange, onDeleted }: Props) {
   const { t } = useTranslation("vault");
-  const { outlinks, backlinks, loading } = useVaultLinks(doc?.agent_id ?? "", doc?.id ?? null);
+  const { outlinks, backlinks, docNames, loading } = useVaultLinks(doc?.id ?? null);
 
   const [editMode, setEditMode] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -34,12 +34,24 @@ export function VaultDetailDialog({ doc, open, onOpenChange, onDeleted }: Props)
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
 
-  // Content always loaded when dialog is open
+  // Determine if this is an image that can be rendered.
+  const isImage = useMemo(() => {
+    const mime = doc?.metadata?.mime_type as string | undefined;
+    if (mime?.startsWith("image/")) return true;
+    const ext = doc?.path.split(".").pop()?.toLowerCase() ?? "";
+    return ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(ext);
+  }, [doc?.metadata, doc?.path]);
+
+  const isMedia = doc?.doc_type === "media";
+
+  // Only fetch text content for non-media files (media/binary cannot be rendered as markdown).
   const { content: fileContent, loading: contentLoading, error: contentError } = useVaultFileContent(
-    open && doc ? doc.path : null,
+    open && doc && !isMedia ? doc.path : null,
   );
-  const { update } = useUpdateDocument(doc?.agent_id ?? "", doc?.id ?? "");
-  const { remove: removeDoc } = useDeleteDocument(doc?.agent_id ?? "", doc?.id ?? "");
+  // Fetch image as authenticated blob URL for <img> rendering.
+  const { url: imageUrl, error: imageError } = useVaultImageUrl(open && isMedia && isImage && doc ? doc.path : null);
+  const { update } = useUpdateDocument(doc?.id ?? "");
+  const { remove: removeDoc } = useDeleteDocument(doc?.id ?? "");
 
   if (!doc) return null;
 
@@ -149,7 +161,37 @@ export function VaultDetailDialog({ doc, open, onOpenChange, onDeleted }: Props)
 
           {/* Content preview — always visible, scrollable */}
           <div className="flex-1 min-h-0 overflow-y-auto rounded-md border bg-muted/30 p-4">
-            {contentLoading ? (
+            {isMedia ? (
+              isImage ? (
+                <div className="flex items-center justify-center">
+                  {imageUrl ? (
+                    <img
+                      src={imageUrl}
+                      alt={doc.title || doc.path}
+                      className="max-w-full max-h-[60vh] object-contain rounded"
+                    />
+                  ) : imageError ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <FileText className="h-4 w-4" />
+                      <span>{t("detail.fileNotFound")}</span>
+                    </div>
+                  ) : (
+                    <div className="h-32 w-32 animate-pulse rounded bg-muted" />
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center gap-3 py-8 text-muted-foreground">
+                  <FileQuestion className="h-10 w-10" />
+                  <div className="text-center space-y-1">
+                    <p className="text-sm font-medium">{t("detail.binaryFile")}</p>
+                    <p className="text-xs">{(doc.metadata?.mime_type as string) || doc.path.split(".").pop()?.toUpperCase()}</p>
+                  </div>
+                  {doc.summary && (
+                    <p className="text-xs text-center max-w-md mt-2">{doc.summary}</p>
+                  )}
+                </div>
+              )
+            ) : contentLoading ? (
               <div className="space-y-2">
                 <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
                 <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
@@ -185,38 +227,40 @@ export function VaultDetailDialog({ doc, open, onOpenChange, onDeleted }: Props)
                   <span>{t("detail.outlinks")} ({outlinks.length})</span>
                 </div>
                 {outlinks.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-1 flex-1">
+                  <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto scrollbar-thin">
                     {outlinks.map((l) => (
-                      <LinkBadge key={l.id} link={l} agentId={doc.agent_id} t={t} />
+                      <LinkBadge key={l.id} link={l} docNames={docNames} t={t} />
                     ))}
                   </div>
                 ) : (
                   <span className="text-xs text-muted-foreground">{t("detail.noLinks")}</span>
                 )}
-                <Button variant="ghost" size="xs" className="h-6 px-1.5 gap-1 shrink-0" onClick={() => setLinkDialogOpen(true)}>
-                  <Plus className="h-3 w-3" />
-                  <span>{t("addLink")}</span>
-                </Button>
               </div>
             )}
 
             {!loading && backlinks.length > 0 && (
-              <div className="flex items-start gap-4 text-xs">
+              <div className="flex items-center gap-4 text-xs">
                 <span className="text-muted-foreground shrink-0">{t("detail.backlinks")} ({backlinks.length})</span>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-thin">
                   {backlinks.map((l) => (
-                    <Badge key={l.id} variant="secondary" className="text-xs">
-                      {l.link_type}: {l.from_doc_id.slice(0, 8)}
+                    <Badge key={l.from_doc_id} variant="secondary" className="text-xs shrink-0" title={l.path}>
+                      {l.title || l.from_doc_id.slice(0, 8)}
                     </Badge>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Hash + link count as subtle footer */}
+            {/* Bottom bar: hash + add link */}
             <div className="flex items-center justify-between text-2xs text-muted-foreground border-t pt-2">
-              <span className="font-mono">SHA-256: {doc.content_hash.length > 16 ? `${doc.content_hash.slice(0, 8)}...${doc.content_hash.slice(-8)}` : doc.content_hash}</span>
-              {linkCount > 0 && <span>{linkCount} link{linkCount !== 1 ? "s" : ""}</span>}
+              <div className="flex items-center gap-3">
+                <span className="font-mono">SHA-256: {doc.content_hash.length > 16 ? `${doc.content_hash.slice(0, 8)}...${doc.content_hash.slice(-8)}` : doc.content_hash}</span>
+                {linkCount > 0 && <span>{linkCount} link{linkCount !== 1 ? "s" : ""}</span>}
+              </div>
+              <Button variant="ghost" size="xs" className="h-6 px-1.5 gap-1" onClick={() => setLinkDialogOpen(true)}>
+                <Plus className="h-3 w-3" />
+                <span className="text-xs">{t("addLink")}</span>
+              </Button>
             </div>
 
             {/* Metadata JSON (if present) */}
@@ -236,7 +280,7 @@ export function VaultDetailDialog({ doc, open, onOpenChange, onDeleted }: Props)
 
       {linkDialogOpen && (
         <VaultLinkDialog
-          agentId={doc.agent_id}
+          agentId={doc.agent_id ?? ""}
           fromDoc={doc}
           open={linkDialogOpen}
           onOpenChange={setLinkDialogOpen}

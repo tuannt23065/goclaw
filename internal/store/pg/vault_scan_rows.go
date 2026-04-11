@@ -14,7 +14,7 @@ import (
 type vaultDocRow struct {
 	ID          uuid.UUID  `db:"id"`
 	TenantID    uuid.UUID  `db:"tenant_id"`
-	AgentID     uuid.UUID  `db:"agent_id"`
+	AgentID     *uuid.UUID `db:"agent_id"`
 	TeamID      *uuid.UUID `db:"team_id"`
 	Scope       string     `db:"scope"`
 	CustomScope *string    `db:"custom_scope"`
@@ -33,7 +33,6 @@ func (r *vaultDocRow) toVaultDocument() store.VaultDocument {
 	doc := store.VaultDocument{
 		ID:          r.ID.String(),
 		TenantID:    r.TenantID.String(),
-		AgentID:     r.AgentID.String(),
 		Scope:       r.Scope,
 		CustomScope: r.CustomScope,
 		Path:        r.Path,
@@ -43,6 +42,10 @@ func (r *vaultDocRow) toVaultDocument() store.VaultDocument {
 		Summary:     r.Summary,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
+	}
+	if r.AgentID != nil {
+		s := r.AgentID.String()
+		doc.AgentID = &s
 	}
 	if r.TeamID != nil {
 		s := r.TeamID.String()

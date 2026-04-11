@@ -359,6 +359,8 @@ type GatewayConfig struct {
 	BlockReply              *bool        `json:"block_reply,omitempty"`                // deliver intermediate text during tool iterations (default false)
 	ToolStatus              *bool        `json:"tool_status,omitempty"`                // show tool name in streaming preview during tool execution (default true)
 	TaskRecoveryIntervalSec int          `json:"task_recovery_interval_sec,omitempty"` // team task recovery ticker interval in seconds (default 300 = 5min)
+	BackgroundProvider      string       `json:"background_provider,omitempty"`        // LLM provider for background workers (vault enrichment, consolidation)
+	BackgroundModel         string       `json:"background_model,omitempty"`           // LLM model for background workers
 }
 
 // ToolsConfig controls tool availability, policy, and web search.

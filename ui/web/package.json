@@ -23,7 +23,6 @@
     "date-fns": "^4.1.0",
     "framer-motion": "^12.38.0",
     "graphology": "^0.26.0",
-    "graphology-communities-louvain": "^2.0.2",
     "graphology-layout": "^0.6.1",
     "graphology-layout-forceatlas2": "^0.10.1",
     "graphology-layout-noverlap": "^0.4.2",
@@ -61,7 +60,7 @@
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
     "unified": "^11.0.5",
-    "vite": "^8.0.3",
+    "vite": "^8.0.8",
     "ws": "^8.20.0"
   },
   "packageManager": "pnpm@10.30.1+sha512.3590e550d5384caa39bd5c7c739f72270234b2f6059e13018f975c313b1eb9fefcc09714048765d4d9efe961382c312e624572c0420762bdc5d5940cdf9be73a"

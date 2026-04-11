@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHttp } from "@/hooks/use-ws";
 import type { VaultDocument, VaultLink, VaultSearchResult } from "@/types/vault";
@@ -72,39 +72,35 @@ export function useVaultSearch(agentId: string) {
   return { search, invalidate };
 }
 
-/** Fetch all links for a set of vault documents (for graph view). */
-export function useVaultAllLinks(agentId: string, documents: { id: string }[]) {
+/** Tenant-wide vault search (agent_id optional). */
+export function useVaultSearchAll() {
   const http = useHttp();
 
+  const search = useCallback(
+    async (query: string, opts?: { agentId?: string; docTypes?: string[]; teamId?: string; maxResults?: number }) => {
+      return http.post<VaultSearchResult[]>("/v1/vault/search", {
+        query,
+        agent_id: opts?.agentId || undefined,
+        doc_types: opts?.docTypes,
+        team_id: opts?.teamId || undefined,
+        max_results: opts?.maxResults ?? 20,
+      });
+    },
+    [http],
+  );
+
+  return { search };
+}
+
+/** Fetch all links for a set of vault documents (single batch query). */
+export function useVaultAllLinks(agentId: string, documents: { id: string }[]) {
+  const http = useHttp();
   const docIds = useMemo(() => documents.map((d) => d.id), [documents]);
 
   const { data, isLoading } = useQuery({
     queryKey: [VAULT_KEY, "all-links", agentId, [...docIds].sort().join(",")],
-    queryFn: async () => {
-      if (docIds.length === 0) return [];
-      const allLinks: VaultLink[] = [];
-      const batchSize = 10;
-      for (let i = 0; i < docIds.length; i += batchSize) {
-        const batch = docIds.slice(i, i + batchSize);
-        const results = await Promise.all(
-          batch.map((id) =>
-            http.get<{ outlinks: VaultLink[]; backlinks: VaultLink[] }>(
-              `/v1/agents/${agentId}/vault/documents/${id}/links`,
-            ).catch(() => ({ outlinks: [], backlinks: [] })),
-          ),
-        );
-        for (const r of results) {
-          allLinks.push(...r.outlinks);
-        }
-      }
-      const seen = new Set<string>();
-      return allLinks.filter((l) => {
-        if (seen.has(l.id)) return false;
-        seen.add(l.id);
-        return true;
-      });
-    },
-    enabled: !!agentId && docIds.length > 0,
+    queryFn: () => http.post<VaultLink[]>("/v1/vault/links/batch", { doc_ids: docIds }),
+    enabled: docIds.length > 0,
     staleTime: 60_000,
   });
 
@@ -137,43 +133,11 @@ export function useVaultGraphData(agentId: string, opts?: { teamId?: string }) {
     [documents],
   );
 
-  // Fetch links grouped by agent_id — works for both single-agent and all-agents mode.
+  // Fetch all links in one batch query (single SQL, no N+1).
+  const docIds = useMemo(() => documents.map((d) => d.id), [documents]);
   const { data: linksData, isLoading: linksLoading } = useQuery({
     queryKey: [VAULT_KEY, "graph-links", docIdKey],
-    queryFn: async () => {
-      if (documents.length === 0) return [];
-      // Group doc IDs by agent_id
-      const byAgent = new Map<string, string[]>();
-      for (const doc of documents) {
-        const aid = doc.agent_id;
-        if (!aid) continue;
-        if (!byAgent.has(aid)) byAgent.set(aid, []);
-        byAgent.get(aid)!.push(doc.id);
-      }
-
-      const allLinks: VaultLink[] = [];
-      for (const [aid, ids] of byAgent) {
-        const batchSize = 10;
-        for (let i = 0; i < ids.length; i += batchSize) {
-          const batch = ids.slice(i, i + batchSize);
-          const results = await Promise.all(
-            batch.map((id) =>
-              http.get<{ outlinks: VaultLink[]; backlinks: VaultLink[] }>(
-                `/v1/agents/${aid}/vault/documents/${id}/links`,
-              ).catch(() => ({ outlinks: [], backlinks: [] })),
-            ),
-          );
-          for (const r of results) allLinks.push(...r.outlinks);
-        }
-      }
-      // Dedup
-      const seen = new Set<string>();
-      return allLinks.filter((l) => {
-        if (seen.has(l.id)) return false;
-        seen.add(l.id);
-        return true;
-      });
-    },
+    queryFn: () => http.post<VaultLink[]>("/v1/vault/links/batch", { doc_ids: docIds }),
     enabled: documents.length > 0,
     staleTime: 60_000,
   });
@@ -181,22 +145,34 @@ export function useVaultGraphData(agentId: string, opts?: { teamId?: string }) {
   return { documents, links: linksData ?? [], loading: docsLoading || linksLoading };
 }
 
+/** Enriched backlink with source doc metadata (from backend JOIN). */
+export interface VaultBacklink {
+  from_doc_id: string;
+  context: string;
+  title: string;
+  path: string;
+  team_id?: string;
+}
+
 /** Get links (outlinks + backlinks) for a vault document. */
-export function useVaultLinks(agentId: string, docId: string | null) {
+export function useVaultLinks(docId: string | null) {
   const http = useHttp();
 
   const { data, isLoading } = useQuery({
-    queryKey: [VAULT_KEY, "links", agentId, docId],
-    queryFn: () => http.get<{ outlinks: VaultLink[]; backlinks: VaultLink[] }>(
-      `/v1/agents/${agentId}/vault/documents/${docId}/links`,
-    ),
-    enabled: !!docId && !!agentId,
+    queryKey: [VAULT_KEY, "links", docId],
+    queryFn: () => http.get<{
+      outlinks: VaultLink[];
+      backlinks: VaultBacklink[];
+      doc_names: Record<string, string>;
+    }>(`/v1/vault/documents/${docId}/links`),
+    enabled: !!docId,
     placeholderData: (prev) => prev,
   });
 
   return {
     outlinks: data?.outlinks ?? [],
     backlinks: data?.backlinks ?? [],
+    docNames: data?.doc_names ?? {},
     loading: isLoading,
   };
 }
@@ -217,6 +193,25 @@ export function useVaultFileContent(path: string | null) {
   });
 
   return { content: data?.content ?? null, size: data?.size ?? 0, loading: isLoading, error: !!error };
+}
+
+/** Fetch an image file as blob URL for authenticated rendering in <img> tags. */
+export function useVaultImageUrl(path: string | null): { url: string | null; error: boolean } {
+  const http = useHttp();
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (!path) { setUrl(null); setError(false); return; }
+    let revoke: string | null = null;
+    setError(false);
+    http.downloadBlob(`/v1/storage/files/${encodeURIComponent(path)}?raw=true`)
+      .then((blob) => { revoke = URL.createObjectURL(blob); setUrl(revoke); })
+      .catch(() => { setUrl(null); setError(true); });
+    return () => { if (revoke) URL.revokeObjectURL(revoke); };
+  }, [path, http]);
+
+  return { url, error };
 }
 
 // Re-export mutations for convenience — consumers can import from this single file
