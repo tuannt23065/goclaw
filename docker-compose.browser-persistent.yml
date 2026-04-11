@@ -8,6 +8,7 @@ services:
       - --remote-allow-origins=*
       - --disable-gpu
       - --disable-dev-shm-usage
+      - --disable-extensions
       - --user-data-dir=/data/chrome-profile
       - --window-size=1920,1080
     ports:

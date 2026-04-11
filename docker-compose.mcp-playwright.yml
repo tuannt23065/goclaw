@@ -1,0 +1,4 @@
+services:
+  goclaw:
+    volumes:
+      - /home/mcp:/home/mcp:ro
