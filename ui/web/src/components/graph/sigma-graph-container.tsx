@@ -164,7 +164,7 @@ export function SigmaGraphContainer({
         onSigmaReady?.(null);
       }
     };
-  }, [graph, edgeType, compact]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [graph, edgeType, compact]);  
 
   // --- Update theme colors without re-init ---
   useEffect(() => {
