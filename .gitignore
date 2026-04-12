@@ -17,6 +17,9 @@ pkg-helper
 .env*
 !.env.example
 
+# Local agent workspace data (per-deployment scripts, configs, runtime data)
+workspace-youtube/
+
 app
 browser-poc
 openclaw-go
