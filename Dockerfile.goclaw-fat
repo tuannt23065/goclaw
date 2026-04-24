@@ -1,0 +1,145 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.goclaw-fat — Debian-based goclaw with video processing deps baked in.
+#
+# Why: claude-cli's bash tool runs inside the goclaw container, so any tool
+# the agent needs must live in the same container. The upstream Alpine image
+# can't host opencv/mediapipe wheels (musl). This image stays Debian, builds
+# the goclaw binary from the LOCAL dev source tree (not upstream :latest,
+# which tracks main and lags behind dev), and adds the minimum video deps
+# (ffmpeg + rclone + yt-dlp + cv2 + numpy) — no MediaPipe, no scenedetect,
+# no librosa, no Pillow.
+#
+# Build:
+#   docker build -f Dockerfile.goclaw-fat -t goclaw-fat:latest .
+#
+# Run via docker-compose.goclaw-fat.yml overlay (overrides goclaw service image).
+
+# Stage 1: build goclaw + pkg-helper from local source (dev branch)
+# Embeds the prebuilt web UI (ui/web/dist) via -tags embedui so the gateway
+# serves the dashboard at / — run `pnpm -C ui/web build` on host before docker build.
+FROM golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN set -eux; \
+    test -f ui/web/dist/index.html || { echo "ERROR: ui/web/dist/index.html missing — run 'pnpm -C ui/web build' first" >&2; exit 1; }; \
+    mkdir -p internal/webui/dist; \
+    cp -r ui/web/dist/. internal/webui/dist/; \
+    VERSION="dev"; \
+    [ -f VERSION ] && VERSION=$(cat VERSION); \
+    CGO_ENABLED=0 GOOS=linux \
+      go build -tags embedui \
+      -ldflags="-s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=${VERSION}" \
+      -o /out/goclaw .; \
+    CGO_ENABLED=0 GOOS=linux \
+      go build -ldflags="-s -w" -o /out/pkg-helper ./cmd/pkg-helper
+
+# Stage 2: Debian runtime with system + Python video tooling
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System packages:
+#   - bash, ca-certificates, curl, wget, jq, ripgrep, file, less, procps, xz-utils — agent ergonomics
+#   - ffmpeg — video encode/decode for the smart-crop pipeline
+#   - rclone — Google Drive transfer (download sources / upload shorts)
+#   - python3 + python3-pip — saliency script runtime
+#   - libgl1, libglib2.0-0 — opencv-python-headless runtime libs
+#   - gosu — privilege drop in entrypoint (replaces Alpine su-exec)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       bash \
+       ca-certificates \
+       curl \
+       ffmpeg \
+       file \
+       fonts-jetbrains-mono \
+       gosu \
+       jq \
+       less \
+       libgl1 \
+       libglib2.0-0 \
+       procps \
+       python3 \
+       python3-pip \
+       rclone \
+       ripgrep \
+       wget \
+       xz-utils \
+  && rm -rf /var/lib/apt/lists/* \
+  && ln -sf /usr/sbin/gosu /usr/local/bin/su-exec
+
+# Python: opencv (for U2-Net via cv2.dnn) + numpy. No MediaPipe.
+# trafilatura + lxml_html_clean for the News Shorts Ops article fetcher.
+# edge-tts for the News Shorts Ops Vietnamese voice-over.
+RUN pip install --no-cache-dir --break-system-packages \
+      numpy==1.26.4 \
+      opencv-python-headless==4.10.0.84 \
+      trafilatura==2.0.0 \
+      lxml_html_clean==0.4.1 \
+      edge-tts==7.2.8
+
+# yt-dlp: latest static binary (Debian apt is stale)
+RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+      -o /usr/local/bin/yt-dlp \
+  && chmod +x /usr/local/bin/yt-dlp
+
+# Node.js 22 + claude-cli (yt agents use provider=claude-cli)
+# Pinned to ^2.1.91 to match upstream goclaw image.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g --cache /tmp/npm-cache @anthropic-ai/claude-code@^2.1.91 \
+  && rm -rf /tmp/npm-cache
+
+# Non-root user (uid 1000 to match host workspace-youtube ownership).
+# HOME=/app to match upstream Alpine image — claude CLI reads $HOME/.claude
+# for credentials, which is symlinked to /app/data/.claude (writable volume).
+RUN useradd --uid 1000 --shell /bin/bash --no-create-home --home-dir /app goclaw
+
+# Copy goclaw + pkg-helper built from local source (dev branch)
+COPY --from=build /out/goclaw /app/goclaw
+COPY --from=build /out/pkg-helper /app/pkg-helper
+# Migrations, bundled skills, and entrypoint come straight from the local tree
+COPY migrations /app/migrations
+COPY skills /app/bundled-skills
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+
+WORKDIR /app
+
+# Recreate runtime dirs (mirroring upstream Dockerfile layout)
+RUN mkdir -p /app/workspace /app/data/.runtime/pip /app/data/.runtime/npm-global/lib \
+        /app/data/.runtime/pip-cache /app/data/.claude /app/skills /app/tsnet-state /app/.goclaw \
+  && ln -s /app/data/.claude /app/.claude \
+  && touch /app/data/.runtime/apk-packages \
+  && chown -R goclaw:goclaw /app/workspace /app/skills /app/tsnet-state /app/.goclaw \
+  && chown goclaw:goclaw /app/bundled-skills /app/data \
+  && chown root:goclaw /app/data/.runtime /app/data/.runtime/apk-packages \
+  && chmod 0750 /app/data/.runtime \
+  && chmod 0640 /app/data/.runtime/apk-packages \
+  && chown -R goclaw:goclaw /app/data/.runtime/pip /app/data/.runtime/npm-global \
+        /app/data/.runtime/pip-cache /app/data/.claude \
+  && chmod +x /app/docker-entrypoint.sh \
+  && chmod 755 /app/pkg-helper && chown root:root /app/pkg-helper \
+  && ln -sf /app/data/.claude/.claude.json /app/.claude.json
+
+# Symlink /shared → /app/workspace-youtube/shared so AGENTS.md "/shared/scripts/..."
+# paths resolve directly. Broken at build time (target doesn't exist), resolved
+# at runtime when workspace-youtube is bind-mounted in via docker-compose.
+RUN ln -s /app/workspace-youtube/shared /shared
+
+ENV GOCLAW_CONFIG=/app/config.json \
+    GOCLAW_WORKSPACE=/app/workspace \
+    GOCLAW_DATA_DIR=/app/data \
+    GOCLAW_SKILLS_DIR=/app/skills \
+    GOCLAW_MIGRATIONS_DIR=/app/migrations \
+    GOCLAW_HOST=0.0.0.0 \
+    GOCLAW_PORT=18790 \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 18790
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["serve"]

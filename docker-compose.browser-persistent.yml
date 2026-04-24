@@ -16,6 +16,7 @@ services:
     shm_size: 2gb
     volumes:
       - chrome-mcp-profile:/data/chrome-profile
+      - ./workspace-goctech:/app/workspace-goctech:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9222/json/version >/dev/null 2>&1"]
       interval: 5s
@@ -31,6 +32,8 @@ services:
   goclaw:
     environment:
       - GOCLAW_BROWSER_REMOTE_URL=ws://chrome-mcp:9222
+      - CDP_HOST=chrome-mcp
+      - CDP_PORT=9222
     depends_on:
       chrome-mcp:
         condition: service_healthy

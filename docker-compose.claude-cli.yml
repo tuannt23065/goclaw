@@ -12,3 +12,7 @@ services:
         ENABLE_CLAUDE_CLI: "true"
     volumes:
       - ${HOME}/.claude:/app/.claude-host:ro
+      - ./workspace-youtube:/app/workspace-youtube:rw
+      - ./workspace-yt-news:/workspace-news:rw
+      - ./workspace-goctech:/app/workspace-goctech:rw
+      - /home/tuannt/.config/rclone:/app/.config/rclone:ro

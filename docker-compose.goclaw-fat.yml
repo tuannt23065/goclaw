@@ -1,0 +1,31 @@
+# Local overlay — switches goclaw service to the fat Debian image
+# (Dockerfile.goclaw-fat) with video processing deps baked in.
+#
+# Why: claude-cli runs commands inside the goclaw container; for the YT
+# pipeline to work without a sidecar, the same container must have ffmpeg,
+# rclone, yt-dlp, opencv (for U2-Net via cv2.dnn), and numpy. The upstream
+# Alpine image can't host opencv (musl), so we use a Debian-based fork
+# built locally.
+#
+# Usage (combine with other overlays as needed):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.postgres.yml \
+#     -f docker-compose.claude-cli.yml \
+#     -f docker-compose.mcp-playwright.yml \
+#     -f docker-compose.browser-persistent.yml \
+#     -f docker-compose.goclaw-fat.yml \
+#     up -d
+
+services:
+  goclaw:
+    image: goclaw-fat:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.goclaw-fat
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '3.0'
+          pids: 200
