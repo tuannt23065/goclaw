@@ -1600,8 +1600,10 @@ CREATE TABLE IF NOT EXISTS news_feed_items (
     llm_reason         TEXT,
     status             TEXT NOT NULL DEFAULT 'new',
     dispatched_task_id TEXT,
+    dispatched_at      TEXT,
     skip_reason        TEXT,
     title_hash         BLOB
 );
 CREATE INDEX IF NOT EXISTS idx_news_items_status ON news_feed_items(status, fetched_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_items_title_hash ON news_feed_items(title_hash);
+CREATE INDEX IF NOT EXISTS idx_news_items_dispatched_at ON news_feed_items(dispatched_at DESC) WHERE status = 'dispatched';

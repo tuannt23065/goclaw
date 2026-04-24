@@ -196,7 +196,7 @@ func (s *Store) MarkItemDuplicate(ctx context.Context, itemID uuid.UUID, reason 
 func (s *Store) MarkItemDispatched(ctx context.Context, itemID, taskID uuid.UUID) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE news_feed_items
-		   SET status = 'dispatched', dispatched_task_id = $2
+		   SET status = 'dispatched', dispatched_task_id = $2, dispatched_at = now()
 		 WHERE id = $1`, itemID, taskID)
 	return err
 }
@@ -207,15 +207,18 @@ func (s *Store) CountDispatchedSince(ctx context.Context, since time.Duration) (
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM news_feed_items
 		 WHERE status = 'dispatched'
-		   AND fetched_at > now() - $1::interval`, fmt.Sprintf("%d seconds", int(since.Seconds()))).Scan(&count)
+		   AND dispatched_at > now() - $1::interval`, fmt.Sprintf("%d seconds", int(since.Seconds()))).Scan(&count)
 	return count, err
 }
 
 // LastDispatchedAt returns the most recent dispatch timestamp.
+// Reads dispatched_at (set in MarkItemDispatched) — NOT fetched_at, which
+// is the ingest time and would let the rate limiter slip every cycle when
+// a freshly-dispatched item happened to be fetched several cycles ago.
 func (s *Store) LastDispatchedAt(ctx context.Context) (*time.Time, error) {
 	var ts sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		SELECT MAX(fetched_at) FROM news_feed_items WHERE status = 'dispatched'`).Scan(&ts)
+		SELECT MAX(dispatched_at) FROM news_feed_items WHERE status = 'dispatched'`).Scan(&ts)
 	if err != nil {
 		return nil, err
 	}

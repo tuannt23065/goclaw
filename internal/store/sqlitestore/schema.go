@@ -16,7 +16,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 18
+const SchemaVersion = 19
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -475,6 +475,15 @@ CREATE TABLE IF NOT EXISTS news_feed_items (
 );
 CREATE INDEX IF NOT EXISTS idx_news_items_status ON news_feed_items(status, fetched_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_items_title_hash ON news_feed_items(title_hash);`,
+
+	// Version 18 → 19: track actual dispatch timestamp (separate from fetched_at)
+	// so the news-monitor rate limiter honors min_dispatch_gap. fetched_at is
+	// ingest time, which can be many cycles older than the actual dispatch and
+	// makes the rate limiter slip every cycle. Backfill for legacy rows uses
+	// fetched_at as a baseline.
+	18: `ALTER TABLE news_feed_items ADD COLUMN dispatched_at TEXT;
+UPDATE news_feed_items SET dispatched_at = fetched_at WHERE status = 'dispatched';
+CREATE INDEX IF NOT EXISTS idx_news_items_dispatched_at ON news_feed_items(dispatched_at DESC) WHERE status = 'dispatched';`,
 }
 
 // backfillV16 populates base_name / path_basename for rows that existed
