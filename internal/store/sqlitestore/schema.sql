@@ -1572,7 +1572,8 @@ CREATE INDEX IF NOT EXISTS idx_vault_links_source
 -- News monitor tables (v18).
 CREATE TABLE IF NOT EXISTS news_feed_subscriptions (
     id               TEXT PRIMARY KEY,
-    url              TEXT NOT NULL UNIQUE,
+    tenant_id        TEXT NOT NULL DEFAULT '0193a5b0-7000-7000-8000-000000000001',
+    url              TEXT NOT NULL,
     source_name      TEXT NOT NULL,
     source_type      TEXT NOT NULL DEFAULT 'rss',
     category         TEXT,
@@ -1583,14 +1584,17 @@ CREATE TABLE IF NOT EXISTS news_feed_subscriptions (
     last_modified    TEXT,
     fetch_fail_count INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, url)
 );
 CREATE INDEX IF NOT EXISTS idx_news_feed_subs_active ON news_feed_subscriptions(active, last_polled_at);
+CREATE INDEX IF NOT EXISTS idx_news_feed_subs_tenant ON news_feed_subscriptions(tenant_id, active, last_polled_at);
 
 CREATE TABLE IF NOT EXISTS news_feed_items (
     id                 TEXT PRIMARY KEY,
     feed_id            TEXT NOT NULL REFERENCES news_feed_subscriptions(id) ON DELETE CASCADE,
-    url                TEXT NOT NULL UNIQUE,
+    tenant_id          TEXT NOT NULL DEFAULT '0193a5b0-7000-7000-8000-000000000001',
+    url                TEXT NOT NULL,
     title              TEXT NOT NULL,
     summary            TEXT,
     published_at       TEXT,
@@ -1602,8 +1606,10 @@ CREATE TABLE IF NOT EXISTS news_feed_items (
     dispatched_task_id TEXT,
     dispatched_at      TEXT,
     skip_reason        TEXT,
-    title_hash         BLOB
+    title_hash         BLOB,
+    UNIQUE (tenant_id, url)
 );
 CREATE INDEX IF NOT EXISTS idx_news_items_status ON news_feed_items(status, fetched_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_items_title_hash ON news_feed_items(title_hash);
 CREATE INDEX IF NOT EXISTS idx_news_items_dispatched_at ON news_feed_items(dispatched_at DESC) WHERE status = 'dispatched';
+CREATE INDEX IF NOT EXISTS idx_news_feed_items_tenant_status ON news_feed_items(tenant_id, status, fetched_at DESC);

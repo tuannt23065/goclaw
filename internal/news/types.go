@@ -75,3 +75,49 @@ type FetchedItem struct {
 	Summary     string
 	PublishedAt *time.Time
 }
+
+// AdminFeedUpdate carries optional updates for AdminUpdateFeed. Nil pointer
+// means "do not change". Used by Web UI handlers.
+type AdminFeedUpdate struct {
+	URL        *string
+	SourceName *string
+	SourceType *string
+	Category   *string
+	Priority   *int
+	Active     *bool
+}
+
+// AdminItemFilter is the query for AdminListItems.
+type AdminItemFilter struct {
+	Status ItemStatus
+	FeedID uuid.UUID
+	Since  *time.Time
+	Limit  int // capped at 200, default 50
+}
+
+// AdminItemView joins news_feed_items + source_name + truncated summary for
+// the Web UI table.
+type AdminItemView struct {
+	ID               uuid.UUID
+	FeedID           uuid.UUID
+	SourceName       string
+	URL              string
+	Title            string
+	Summary          string // truncated to 200 chars by query
+	PublishedAt      *time.Time
+	FetchedAt        time.Time
+	DispatchedAt     *time.Time
+	HeuristicScore   *int
+	Status           ItemStatus
+	DispatchedTaskID *uuid.UUID
+	SkipReason       string
+}
+
+// AdminCycleStats is the snapshot returned by news.monitor.status.
+type AdminCycleStats struct {
+	Dispatched   int
+	Scored       int
+	Skipped      int
+	Duplicates   int
+	TotalFetched int
+}

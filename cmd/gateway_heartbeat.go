@@ -93,37 +93,42 @@ func startCronAndHeartbeat(
 	})
 
 	// Start news monitor (event-driven FB posting) if enabled in config.
-	startNewsMonitor(context.Background(), pgStores, msgBus, cfg)
+	newsStore, newsMonitor := startNewsMonitor(context.Background(), pgStores, msgBus, cfg)
+	if newsStore != nil {
+		methods.NewNewsMethods(newsStore, newsMonitor, cfg).Register(server.Router())
+	}
 
 	return heartbeatTicker
 }
 
 // startNewsMonitor wires up the RSS/HTML news feed poller that dispatches
 // posting tasks to the goctech team leader. Disabled by default — opt-in via
-// cfg.NewsMonitor.Enabled.
-func startNewsMonitor(ctx context.Context, pgStores *store.Stores, msgBus *bus.MessageBus, cfg *config.Config) {
+// cfg.NewsMonitor.Enabled. Returns the constructed Store + Monitor so the
+// caller can register the admin WS methods (news.feeds.*, news.items.*,
+// news.monitor.*); both are nil when the monitor is disabled.
+func startNewsMonitor(ctx context.Context, pgStores *store.Stores, msgBus *bus.MessageBus, cfg *config.Config) (*news.Store, *news.Monitor) {
 	nm := cfg.NewsMonitor
 	if !nm.Enabled {
 		slog.Info("news.monitor.disabled")
-		return
+		return nil, nil
 	}
 	tenantID, err := uuid.Parse(nm.TenantID)
 	if err != nil {
 		slog.Warn("news.monitor: invalid tenant_id — monitor not started", "value", nm.TenantID, "error", err)
-		return
+		return nil, nil
 	}
 	teamID, err := uuid.Parse(nm.TeamID)
 	if err != nil {
 		slog.Warn("news.monitor: invalid team_id — monitor not started", "value", nm.TeamID, "error", err)
-		return
+		return nil, nil
 	}
 	if nm.LeaderAgentKey == "" || nm.UserID == "" {
 		slog.Warn("news.monitor: leader_agent_key or user_id empty — monitor not started")
-		return
+		return nil, nil
 	}
 	if pgStores.DB == nil {
 		slog.Warn("news.monitor: pgStores.DB nil (SQLite build?) — monitor not started")
-		return
+		return nil, nil
 	}
 
 	interval := nm.IntervalMinutes
@@ -148,7 +153,7 @@ func startNewsMonitor(ctx context.Context, pgStores *store.Stores, msgBus *bus.M
 		maxPerCycle = 2
 	}
 
-	newsStore := news.NewStore(pgStores.DB)
+	newsStore := news.NewStore(pgStores.DB, tenantID)
 	fetcher := news.NewFetcher()
 	rl := news.NewRateLimiter(newsStore, minGap, quietStart, quietEnd)
 	dispatcher := news.NewDispatcher(msgBus, pgStores.Teams, pgStores.Agents, news.DispatcherConfig{
@@ -165,4 +170,5 @@ func startNewsMonitor(ctx context.Context, pgStores *store.Stores, msgBus *bus.M
 	ticker.Start(ctx)
 	slog.Info("news.monitor.started", "interval_min", interval, "team", nm.TeamID, "leader", nm.LeaderAgentKey,
 		"min_gap_min", minGap, "quiet", quietStart, "to", quietEnd, "threshold", threshold)
+	return newsStore, monitor
 }

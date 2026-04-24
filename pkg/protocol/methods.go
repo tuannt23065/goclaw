@@ -112,6 +112,19 @@ const (
 	MethodChannelInstancesDelete = "channels.instances.delete"
 )
 
+// News monitor admin (Web UI). Tenant-scoped: each method filters
+// news_feed_subscriptions / news_feed_items by the caller's tenant.
+const (
+	MethodNewsFeedsList     = "news.feeds.list"
+	MethodNewsFeedsCreate   = "news.feeds.create"
+	MethodNewsFeedsUpdate   = "news.feeds.update"
+	MethodNewsFeedsDelete   = "news.feeds.delete"
+	MethodNewsFeedsToggle   = "news.feeds.toggle"
+	MethodNewsItemsList     = "news.items.list"
+	MethodNewsMonitorStatus = "news.monitor.status"
+	MethodNewsMonitorRun    = "news.monitor.run"
+)
+
 // Agent links (inter-agent delegation)
 const (
 	MethodAgentsLinksList   = "agents.links.list"

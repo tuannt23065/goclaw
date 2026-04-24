@@ -16,7 +16,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 19
+const SchemaVersion = 20
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -484,6 +484,16 @@ CREATE INDEX IF NOT EXISTS idx_news_items_title_hash ON news_feed_items(title_ha
 	18: `ALTER TABLE news_feed_items ADD COLUMN dispatched_at TEXT;
 UPDATE news_feed_items SET dispatched_at = fetched_at WHERE status = 'dispatched';
 CREATE INDEX IF NOT EXISTS idx_news_items_dispatched_at ON news_feed_items(dispatched_at DESC) WHERE status = 'dispatched';`,
+
+	// Version 19 → 20: tenant-scope news feeds + items so the Web UI can manage
+	// per tenant. SQLite doesn't enforce default backfill on existing rows the
+	// same way PG does, so set tenant_id explicitly on legacy data (single-tenant
+	// SQLite deployments can use any tenant_id; we use the master uuid as a stable
+	// default, matching the PG migration).
+	19: `ALTER TABLE news_feed_subscriptions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '0193a5b0-7000-7000-8000-000000000001';
+ALTER TABLE news_feed_items ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '0193a5b0-7000-7000-8000-000000000001';
+CREATE INDEX IF NOT EXISTS idx_news_feed_subs_tenant ON news_feed_subscriptions(tenant_id, active, last_polled_at);
+CREATE INDEX IF NOT EXISTS idx_news_feed_items_tenant_status ON news_feed_items(tenant_id, status, fetched_at DESC);`,
 }
 
 // backfillV16 populates base_name / path_basename for rows that existed
