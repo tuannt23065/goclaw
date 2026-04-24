@@ -71,9 +71,15 @@ func (p *ClaudeCLIProvider) buildArgs(model, workDir, mcpConfigPath string, cliS
 		// Summoner: disable all tools entirely via disallowedTools
 		args = append(args, "--disallowedTools", "Bash,Edit,Read,Write,Glob,Grep,WebFetch,WebSearch,TodoRead,TodoWrite,NotebookRead,NotebookEdit")
 	} else if mcpConfigPath != "" {
-		// Chat with MCP bridge: disable CLI built-in tools, only allow MCP bridge tools.
-		// This ensures all tool execution goes through GoClaw's controlled MCP bridge.
-		args = append(args, "--disallowedTools", "Bash,Edit,Read,Write,Glob,Grep,WebFetch,WebSearch,TodoRead,TodoWrite,NotebookRead,NotebookEdit")
+		// Chat with MCP bridge: route file/shell tool execution through GoClaw's
+		// controlled MCP bridge so each call is logged + sandboxed + tenant-scoped.
+		// WebFetch + WebSearch are deliberately KEPT enabled — GoClaw has no MCP
+		// equivalent for them, and disabling them would silently strip web access
+		// from every agent (which is what happened: agents would hallucinate news
+		// instead of fetching it). They make outbound HTTP only, no FS / shell
+		// side effects, so the security delta versus letting CLI handle them
+		// directly is negligible.
+		args = append(args, "--disallowedTools", "Bash,Edit,Read,Write,Glob,Grep,TodoRead,TodoWrite,NotebookRead,NotebookEdit")
 	}
 
 	if p.hooksSettingsPath != "" {

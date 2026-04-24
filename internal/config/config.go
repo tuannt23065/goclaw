@@ -53,8 +53,26 @@ type Config struct {
 	Cron      CronConfig      `json:"cron"`
 	Telemetry TelemetryConfig `json:"telemetry"`
 	Tailscale TailscaleConfig `json:"tailscale"`
+	NewsMonitor NewsMonitorConfig `json:"news_monitor,omitempty"`
 	Bindings  []AgentBinding  `json:"bindings,omitempty"`
 	mu        sync.RWMutex
+}
+
+// NewsMonitorConfig controls the RSS/HTML news poller that drives event-driven
+// posting for the goctech team (replaces 6 fixed-slot cron jobs).
+// Disabled by default — set Enabled=true + fill agent/team/user IDs to turn on.
+type NewsMonitorConfig struct {
+	Enabled              bool   `json:"enabled"`                 // master switch
+	TeamID               string `json:"team_id,omitempty"`       // goctech team UUID
+	LeaderAgentKey       string `json:"leader_agent_key,omitempty"` // e.g. "goctech-leader"
+	TenantID             string `json:"tenant_id,omitempty"`
+	UserID               string `json:"user_id,omitempty"`
+	IntervalMinutes      int    `json:"interval_minutes,omitempty"`       // default 15
+	MinDispatchGapMin    int    `json:"min_dispatch_gap_min,omitempty"`   // default 30
+	QuietHoursStart      int    `json:"quiet_hours_start,omitempty"`      // VN hour, default 0
+	QuietHoursEnd        int    `json:"quiet_hours_end,omitempty"`        // VN hour, default 6
+	HeuristicThreshold   int    `json:"heuristic_threshold,omitempty"`    // score>=X to dispatch (default 6)
+	MaxDispatchPerCycle  int    `json:"max_dispatch_per_cycle,omitempty"` // default 2
 }
 
 // TailscaleConfig configures the optional Tailscale tsnet listener.

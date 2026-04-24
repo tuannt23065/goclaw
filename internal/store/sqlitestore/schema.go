@@ -16,7 +16,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 17
+const SchemaVersion = 18
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -438,6 +438,43 @@ CREATE INDEX IF NOT EXISTS idx_vault_docs_delegation
 
 	// Version 16 → 17: path prefix index for vault tree lazy-load queries.
 	16: `CREATE INDEX IF NOT EXISTS idx_vault_docs_path_prefix ON vault_documents(tenant_id, path);`,
+
+	// Version 17 → 18: news monitor tables (opt-in, desktop/lite won't normally enable).
+	17: `CREATE TABLE IF NOT EXISTS news_feed_subscriptions (
+    id               TEXT PRIMARY KEY,
+    url              TEXT NOT NULL UNIQUE,
+    source_name      TEXT NOT NULL,
+    source_type      TEXT NOT NULL DEFAULT 'rss',
+    category         TEXT,
+    priority         INTEGER NOT NULL DEFAULT 5,
+    active           INTEGER NOT NULL DEFAULT 1,
+    last_polled_at   TEXT,
+    last_etag        TEXT,
+    last_modified    TEXT,
+    fetch_fail_count INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_news_feed_subs_active ON news_feed_subscriptions(active, last_polled_at);
+
+CREATE TABLE IF NOT EXISTS news_feed_items (
+    id                 TEXT PRIMARY KEY,
+    feed_id            TEXT NOT NULL REFERENCES news_feed_subscriptions(id) ON DELETE CASCADE,
+    url                TEXT NOT NULL UNIQUE,
+    title              TEXT NOT NULL,
+    summary            TEXT,
+    published_at       TEXT,
+    fetched_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    heuristic_score    INTEGER,
+    llm_score          INTEGER,
+    llm_reason         TEXT,
+    status             TEXT NOT NULL DEFAULT 'new',
+    dispatched_task_id TEXT,
+    skip_reason        TEXT,
+    title_hash         BLOB
+);
+CREATE INDEX IF NOT EXISTS idx_news_items_status ON news_feed_items(status, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_items_title_hash ON news_feed_items(title_hash);`,
 }
 
 // backfillV16 populates base_name / path_basename for rows that existed

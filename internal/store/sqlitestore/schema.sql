@@ -1568,3 +1568,40 @@ CREATE INDEX IF NOT EXISTS idx_vault_links_to ON vault_links(to_doc_id);
 CREATE INDEX IF NOT EXISTS idx_vault_links_source
     ON vault_links(json_extract(metadata, '$.source'))
     WHERE json_extract(metadata, '$.source') IS NOT NULL;
+
+-- News monitor tables (v18).
+CREATE TABLE IF NOT EXISTS news_feed_subscriptions (
+    id               TEXT PRIMARY KEY,
+    url              TEXT NOT NULL UNIQUE,
+    source_name      TEXT NOT NULL,
+    source_type      TEXT NOT NULL DEFAULT 'rss',
+    category         TEXT,
+    priority         INTEGER NOT NULL DEFAULT 5,
+    active           INTEGER NOT NULL DEFAULT 1,
+    last_polled_at   TEXT,
+    last_etag        TEXT,
+    last_modified    TEXT,
+    fetch_fail_count INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_news_feed_subs_active ON news_feed_subscriptions(active, last_polled_at);
+
+CREATE TABLE IF NOT EXISTS news_feed_items (
+    id                 TEXT PRIMARY KEY,
+    feed_id            TEXT NOT NULL REFERENCES news_feed_subscriptions(id) ON DELETE CASCADE,
+    url                TEXT NOT NULL UNIQUE,
+    title              TEXT NOT NULL,
+    summary            TEXT,
+    published_at       TEXT,
+    fetched_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    heuristic_score    INTEGER,
+    llm_score          INTEGER,
+    llm_reason         TEXT,
+    status             TEXT NOT NULL DEFAULT 'new',
+    dispatched_task_id TEXT,
+    skip_reason        TEXT,
+    title_hash         BLOB
+);
+CREATE INDEX IF NOT EXISTS idx_news_items_status ON news_feed_items(status, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_items_title_hash ON news_feed_items(title_hash);

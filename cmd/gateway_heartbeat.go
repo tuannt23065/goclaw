@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway/methods"
 	"github.com/nextlevelbuilder/goclaw/internal/heartbeat"
+	"github.com/nextlevelbuilder/goclaw/internal/news"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -90,5 +92,77 @@ func startCronAndHeartbeat(
 		return tokens, cw
 	})
 
+	// Start news monitor (event-driven FB posting) if enabled in config.
+	startNewsMonitor(context.Background(), pgStores, msgBus, cfg)
+
 	return heartbeatTicker
+}
+
+// startNewsMonitor wires up the RSS/HTML news feed poller that dispatches
+// posting tasks to the goctech team leader. Disabled by default — opt-in via
+// cfg.NewsMonitor.Enabled.
+func startNewsMonitor(ctx context.Context, pgStores *store.Stores, msgBus *bus.MessageBus, cfg *config.Config) {
+	nm := cfg.NewsMonitor
+	if !nm.Enabled {
+		slog.Info("news.monitor.disabled")
+		return
+	}
+	tenantID, err := uuid.Parse(nm.TenantID)
+	if err != nil {
+		slog.Warn("news.monitor: invalid tenant_id — monitor not started", "value", nm.TenantID, "error", err)
+		return
+	}
+	teamID, err := uuid.Parse(nm.TeamID)
+	if err != nil {
+		slog.Warn("news.monitor: invalid team_id — monitor not started", "value", nm.TeamID, "error", err)
+		return
+	}
+	if nm.LeaderAgentKey == "" || nm.UserID == "" {
+		slog.Warn("news.monitor: leader_agent_key or user_id empty — monitor not started")
+		return
+	}
+	if pgStores.DB == nil {
+		slog.Warn("news.monitor: pgStores.DB nil (SQLite build?) — monitor not started")
+		return
+	}
+
+	interval := nm.IntervalMinutes
+	if interval <= 0 {
+		interval = 15
+	}
+	minGap := nm.MinDispatchGapMin
+	if minGap <= 0 {
+		minGap = 30
+	}
+	quietStart := nm.QuietHoursStart
+	quietEnd := nm.QuietHoursEnd
+	if quietEnd == 0 {
+		quietEnd = 6
+	}
+	threshold := nm.HeuristicThreshold
+	if threshold <= 0 {
+		threshold = 6
+	}
+	maxPerCycle := nm.MaxDispatchPerCycle
+	if maxPerCycle <= 0 {
+		maxPerCycle = 2
+	}
+
+	newsStore := news.NewStore(pgStores.DB)
+	fetcher := news.NewFetcher()
+	rl := news.NewRateLimiter(newsStore, minGap, quietStart, quietEnd)
+	dispatcher := news.NewDispatcher(msgBus, pgStores.Teams, pgStores.Agents, news.DispatcherConfig{
+		TenantID:    tenantID,
+		UserID:      nm.UserID,
+		TeamID:      teamID,
+		LeaderAgent: nm.LeaderAgentKey,
+	})
+	monitor := news.NewMonitor(newsStore, fetcher, rl, dispatcher, news.MonitorConfig{
+		HeuristicThreshold:  threshold,
+		MaxDispatchPerCycle: maxPerCycle,
+	})
+	ticker := news.NewTicker(monitor, time.Duration(interval)*time.Minute)
+	ticker.Start(ctx)
+	slog.Info("news.monitor.started", "interval_min", interval, "team", nm.TeamID, "leader", nm.LeaderAgentKey,
+		"min_gap_min", minGap, "quiet", quietStart, "to", quietEnd, "threshold", threshold)
 }

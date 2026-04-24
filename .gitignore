@@ -19,6 +19,8 @@ pkg-helper
 
 # Local agent workspace data (per-deployment scripts, configs, runtime data)
 workspace-youtube/
+workspace-yt-news/
+workspace-goctech/
 
 app
 browser-poc
@@ -33,6 +35,8 @@ ui/web/node_modules/
 ui/web/dist/
 ui/web/.vite/
 *.tsbuildinfo
+# Embedded web UI build output (copied from ui/web/dist at build time)
+internal/webui/dist/
 
 # UI Desktop (Wails + React)
 ui/desktop/frontend/node_modules/
@@ -53,6 +57,7 @@ goclaw-lite-*.zip
 .mcp.json
 tmp
 .claude/
+CLAUDE.local.md
 
 deploy-*.sh
 

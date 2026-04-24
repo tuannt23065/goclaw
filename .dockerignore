@@ -21,3 +21,9 @@ ui/simple-saas/
 !ui/web/
 plans/
 skills-store/
+workspace-youtube/
+workspace-yt-news/
+workspace-goctech/
+ui/web/node_modules/
+/goclaw
+/goclaw-*
