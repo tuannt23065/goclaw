@@ -70,11 +70,18 @@ func (h *ProvidersHandler) handleVerifyProvider(w http.ResponseWriter, r *http.R
 
 	// Claude CLI: validate model alias locally (no LLM call needed)
 	if p.ProviderType == "claude_cli" {
-		validModels := map[string]bool{"sonnet": true, "opus": true, "haiku": true}
+		validModels := map[string]bool{
+			"sonnet": true, "opus": true, "haiku": true,
+			"claude-opus-4-5":   true,
+			"claude-opus-4-6":   true,
+			"claude-sonnet-4-5": true,
+			"claude-sonnet-4-6": true,
+			"claude-haiku-4-5":  true,
+		}
 		if validModels[req.Model] {
 			writeJSON(w, http.StatusOK, map[string]any{"valid": true})
 		} else {
-			writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": "Invalid model. Use: sonnet, opus, or haiku"})
+			writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": "Invalid model"})
 		}
 		return
 	}

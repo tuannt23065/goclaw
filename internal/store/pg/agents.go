@@ -202,6 +202,12 @@ func (s *PGAgentStore) Update(ctx context.Context, id uuid.UUID, updates map[str
 			updates[col] = 0
 		}
 	}
+	// NOT NULL text columns: null → empty string.
+	for _, col := range []string{"emoji", "agent_description", "thinking_level"} {
+		if v, ok := updates[col]; ok && v == nil {
+			updates[col] = ""
+		}
+	}
 	// NOT NULL JSONB columns: null → empty object.
 	for _, col := range []string{"chatgpt_oauth_routing", "reasoning_config", "workspace_sharing", "shell_deny_groups", "kg_dedup_config"} {
 		if v, ok := updates[col]; ok && v == nil {

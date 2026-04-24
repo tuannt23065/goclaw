@@ -78,6 +78,10 @@ func claudeCLIModels() []ModelInfo {
 		{ID: "sonnet", Name: "Sonnet"},
 		{ID: "opus", Name: "Opus"},
 		{ID: "haiku", Name: "Haiku"},
+		{ID: "claude-opus-4-5", Name: "Opus 4.5"},
+		{ID: "claude-opus-4-6", Name: "Opus 4.6"},
+		{ID: "claude-sonnet-4-6", Name: "Sonnet 4.6"},
+		{ID: "claude-haiku-4-5", Name: "Haiku 4.5"},
 	}
 }
 
