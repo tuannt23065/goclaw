@@ -94,6 +94,15 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
   && npm install -g --cache /tmp/npm-cache @anthropic-ai/claude-code@^2.1.91 \
   && rm -rf /tmp/npm-cache
 
+# Point /bin/sh at bash. Debian default is dash, which has a heredoc bug:
+# when the line being read shares its first byte with the delimiter and the
+# next byte is a UTF-8 multi-byte continuation start (e.g. 0xE1), dash drops
+# that 0xE1, mangling Vietnamese characters like "Mấy" → "M��y" on FB.
+# Bash handles UTF-8 in heredocs correctly. Goctech poster (and any other
+# claude-cli agent) shells out via /bin/sh, so flipping the symlink is the
+# minimum-blast-radius fix.
+RUN ln -sf /bin/bash /bin/sh
+
 # Non-root user (uid 1000 to match host workspace-youtube ownership).
 # HOME=/app to match upstream Alpine image — claude CLI reads $HOME/.claude
 # for credentials, which is symlinked to /app/data/.claude (writable volume).
