@@ -301,21 +301,21 @@ func (s *Store) AdminDeleteFeed(ctx context.Context, tenantID, feedID uuid.UUID)
 // AdminListItems returns items for tenant, optionally filtered by status and
 // feed. Summary is truncated to 200 chars to keep payloads small.
 func (s *Store) AdminListItems(ctx context.Context, tenantID uuid.UUID, filter AdminItemFilter) ([]AdminItemView, error) {
-	conds := []string{"tenant_id = $1"}
+	conds := []string{"i.tenant_id = $1"}
 	args := []any{tenantID}
 	idx := 2
 	if filter.Status != "" {
-		conds = append(conds, fmt.Sprintf("status = $%d", idx))
+		conds = append(conds, fmt.Sprintf("i.status = $%d", idx))
 		args = append(args, filter.Status)
 		idx++
 	}
 	if filter.FeedID != uuid.Nil {
-		conds = append(conds, fmt.Sprintf("feed_id = $%d", idx))
+		conds = append(conds, fmt.Sprintf("i.feed_id = $%d", idx))
 		args = append(args, filter.FeedID)
 		idx++
 	}
 	if filter.Since != nil {
-		conds = append(conds, fmt.Sprintf("fetched_at > $%d", idx))
+		conds = append(conds, fmt.Sprintf("i.fetched_at > $%d", idx))
 		args = append(args, *filter.Since)
 		idx++
 	}
