@@ -36,6 +36,9 @@ const SkillsPage = lazyWithRetry(() =>
 const CronPage = lazyWithRetry(() =>
   import("@/pages/cron/cron-page").then((m) => ({ default: m.CronPage })),
 );
+const NewsMonitorPage = lazyWithRetry(() =>
+  import("@/pages/news-monitor/news-monitor-page").then((m) => ({ default: m.NewsMonitorPage })),
+);
 const ConfigPage = lazyWithRetry(() =>
   import("@/pages/config/config-page").then((m) => ({ default: m.ConfigPage })),
 );
@@ -172,6 +175,7 @@ export function AppRoutes() {
           <Route path={ROUTES.SKILL_DETAIL} element={<SkillsPage key="detail" />} />
           <Route path={ROUTES.CRON} element={<CronPage key="list" />} />
           <Route path={ROUTES.CRON_DETAIL} element={<CronPage key="detail" />} />
+          <Route path={ROUTES.NEWS_MONITOR} element={<RequireAdmin><NewsMonitorPage /></RequireAdmin>} />
           {/* Admin-only pages */}
           <Route path={ROUTES.CONFIG} element={<RequireCrossTenant><ConfigPage /></RequireCrossTenant>} />
           <Route path={ROUTES.PROVIDERS} element={<RequireAdmin><ProvidersPage key="list" /></RequireAdmin>} />

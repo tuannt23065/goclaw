@@ -29,6 +29,7 @@ import {
   ArrowLeftRight,
   FileArchive,
   DatabaseBackup,
+  Newspaper,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SidebarGroup } from "./sidebar-group";
@@ -108,6 +109,9 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
             <SidebarItem to={ROUTES.TTS} icon={Volume2} label={t("nav.tts")} collapsed={collapsed} />
           )}
           <SidebarItem to={ROUTES.CRON} icon={Clock} label={t("nav.cron")} collapsed={collapsed} />
+          {isAdmin && (
+            <SidebarItem to={ROUTES.NEWS_MONITOR} icon={Newspaper} label="News Monitor" collapsed={collapsed} />
+          )}
         </SidebarGroup>
 
         <SidebarGroup label={t("groups.data")} collapsed={collapsed}>

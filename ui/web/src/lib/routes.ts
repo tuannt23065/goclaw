@@ -13,6 +13,7 @@ export const ROUTES = {
   SKILL_DETAIL: "/skills/:id",
   CRON: "/cron",
   CRON_DETAIL: "/cron/:id",
+  NEWS_MONITOR: "/news-monitor",
   CONFIG: "/config",
   TRACES: "/traces",
   TRACE_DETAIL: "/traces/:id",
