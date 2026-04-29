@@ -92,7 +92,10 @@ func startCronAndHeartbeat(
 		return tokens, cw
 	})
 
-	// Start news monitor (event-driven FB posting) if enabled in config.
+	// Wire up news admin store + (optionally) start the polling monitor.
+	// Admin WS methods register whenever the store is available so the Web UI
+	// can browse feeds/items even when the poller is paused — only the actual
+	// polling goroutine is gated by cfg.NewsMonitor.Enabled.
 	newsStore, newsMonitor := startNewsMonitor(context.Background(), pgStores, msgBus, cfg)
 	if newsStore != nil {
 		methods.NewNewsMethods(newsStore, newsMonitor, cfg).Register(server.Router())
@@ -102,33 +105,39 @@ func startCronAndHeartbeat(
 }
 
 // startNewsMonitor wires up the RSS/HTML news feed poller that dispatches
-// posting tasks to the goctech team leader. Disabled by default — opt-in via
-// cfg.NewsMonitor.Enabled. Returns the constructed Store + Monitor so the
-// caller can register the admin WS methods (news.feeds.*, news.items.*,
-// news.monitor.*); both are nil when the monitor is disabled.
+// posting tasks to the goctech team leader. The poller goroutine is opt-in via
+// cfg.NewsMonitor.Enabled, but the Store is built whenever the tenant is valid
+// so the admin WS methods (news.feeds.*, news.items.*, news.monitor.status)
+// stay reachable from the Web UI regardless of the enable flag. Returns
+// (store, monitor); monitor is nil when the poller is disabled.
 func startNewsMonitor(ctx context.Context, pgStores *store.Stores, msgBus *bus.MessageBus, cfg *config.Config) (*news.Store, *news.Monitor) {
 	nm := cfg.NewsMonitor
-	if !nm.Enabled {
-		slog.Info("news.monitor.disabled")
+	if pgStores.DB == nil {
+		slog.Warn("news.monitor: pgStores.DB nil (SQLite build?) — monitor not started")
 		return nil, nil
 	}
 	tenantID, err := uuid.Parse(nm.TenantID)
 	if err != nil {
-		slog.Warn("news.monitor: invalid tenant_id — monitor not started", "value", nm.TenantID, "error", err)
+		slog.Warn("news.monitor: invalid tenant_id — admin store + monitor not started", "value", nm.TenantID, "error", err)
 		return nil, nil
 	}
+
+	// Always build the admin store so Web UI can browse feeds/items.
+	newsStore := news.NewStore(pgStores.DB, tenantID)
+
+	if !nm.Enabled {
+		slog.Info("news.monitor.disabled", "note", "admin Web UI methods still registered; poller goroutine not started")
+		return newsStore, nil
+	}
+
 	teamID, err := uuid.Parse(nm.TeamID)
 	if err != nil {
-		slog.Warn("news.monitor: invalid team_id — monitor not started", "value", nm.TeamID, "error", err)
-		return nil, nil
+		slog.Warn("news.monitor: invalid team_id — poller not started (admin still available)", "value", nm.TeamID, "error", err)
+		return newsStore, nil
 	}
 	if nm.LeaderAgentKey == "" || nm.UserID == "" {
-		slog.Warn("news.monitor: leader_agent_key or user_id empty — monitor not started")
-		return nil, nil
-	}
-	if pgStores.DB == nil {
-		slog.Warn("news.monitor: pgStores.DB nil (SQLite build?) — monitor not started")
-		return nil, nil
+		slog.Warn("news.monitor: leader_agent_key or user_id empty — poller not started (admin still available)")
+		return newsStore, nil
 	}
 
 	interval := nm.IntervalMinutes
@@ -153,7 +162,6 @@ func startNewsMonitor(ctx context.Context, pgStores *store.Stores, msgBus *bus.M
 		maxPerCycle = 2
 	}
 
-	newsStore := news.NewStore(pgStores.DB, tenantID)
 	fetcher := news.NewFetcher()
 	rl := news.NewRateLimiter(newsStore, minGap, quietStart, quietEnd)
 	dispatcher := news.NewDispatcher(msgBus, pgStores.Teams, pgStores.Agents, news.DispatcherConfig{
